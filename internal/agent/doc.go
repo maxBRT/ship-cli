@@ -1,2 +1,2 @@
-// Package agent will hold the Agent adapter (Cursor headless for MVP).
+// Package agent defines the Agent Port and Cursor headless adapter for Phases.
 package agent
