@@ -14,7 +14,7 @@ func TestParseConfig_defaults(t *testing.T) {
 	}
 
 	if cfg.Branch != "" {
-		t.Errorf("Branch = %q, want empty (generate ship/<id> later)", cfg.Branch)
+		t.Errorf("Branch = %q, want empty (generate ship/<id>)", cfg.Branch)
 	}
 	if cfg.Feature != "" {
 		t.Errorf("Feature = %q, want empty", cfg.Feature)

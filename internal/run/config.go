@@ -55,7 +55,7 @@ func defaultConfig() Config {
 
 func newFlagSet(cfg *Config) *flag.FlagSet {
 	fs := flag.NewFlagSet("ship", flag.ContinueOnError)
-	fs.StringVar(&cfg.Branch, "branch", cfg.Branch, "git branch for the Run (empty means generate ship/<id> later)")
+	fs.StringVar(&cfg.Branch, "branch", cfg.Branch, "git branch for the Run (empty means generate ship/<id>)")
 	fs.StringVar(&cfg.Feature, "feature", cfg.Feature, "optional Ready for Agent filter label for Tickets")
 	fs.StringVar(&cfg.Agent, "agent", cfg.Agent, "Agent binary used for every Phase")
 	fs.StringVar(&cfg.Model, "model", cfg.Model, "optional model for the Agent")
