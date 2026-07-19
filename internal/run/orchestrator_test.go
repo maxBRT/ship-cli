@@ -1,0 +1,324 @@
+package run_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/maxBRT/ship-cli/internal/agent"
+	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/run"
+	"github.com/maxBRT/ship-cli/internal/ticket"
+)
+
+func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{}
+	ag := &fakeAgent{}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "No Ready for Agent Tickets") {
+		t.Errorf("stdout = %q, want empty-queue message", out.String())
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
+	}
+	if len(tickets.claimed) != 0 {
+		t.Errorf("claimed = %v, want none", tickets.claimed)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+}
+
+func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
+	ag := committingAgent(t)
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10, Model: "composer"},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if b := currentBranch(t, dir); b != "ship/run" {
+		t.Errorf("branch = %q, want ship/run", b)
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
+		t.Errorf("claimed = %v, want [7 8]", got)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
+		t.Errorf("done = %v, want [7 8]", got)
+	}
+	// Two Phases (Implement, Review) per Ticket.
+	if len(ag.reqs) != 4 {
+		t.Fatalf("agent called %d times, want 4", len(ag.reqs))
+	}
+	// Each Phase gets the checkout as its workspace and the configured model.
+	for i, req := range ag.reqs {
+		if req.Workspace != dir {
+			t.Errorf("req %d workspace = %q, want %q", i, req.Workspace, dir)
+		}
+		if req.Model != "composer" {
+			t.Errorf("req %d model = %q, want composer", i, req.Model)
+		}
+	}
+	// Implement Phase for Ticket 7 references its number and the branch.
+	if !strings.Contains(ag.reqs[0].Prompt, "#7") || !strings.Contains(ag.reqs[0].Prompt, "ship/run") {
+		t.Errorf("first prompt missing Ticket/branch context:\n%s", ag.reqs[0].Prompt)
+	}
+	if !strings.Contains(out.String(), "Queue drained") {
+		t.Errorf("stdout = %q, want drain summary", out.String())
+	}
+}
+
+func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}, {Number: 9}}}
+	ag := committingAgent(t)
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 2},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
+		t.Errorf("done = %v, want [7 8] (stopped at max)", got)
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
+		t.Errorf("claimed = %v, want [7 8]; Ticket 9 must stay claimable", got)
+	}
+	if !strings.Contains(out.String(), "max iterations") {
+		t.Errorf("stdout = %q, want partial-progress message", out.String())
+	}
+}
+
+func TestRun_implementWithoutCommitFailsAndDoesNotMarkDone(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}}}
+	// Agent that never commits: Implement produces no side effect.
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error { return nil }}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Implement commits nothing")
+	}
+	if !strings.Contains(err.Error(), "no commit") {
+		t.Errorf("error = %q, want mention of missing commit", err)
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7}) {
+		t.Errorf("claimed = %v, want [7]", got)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none (Iteration failed)", tickets.doneList)
+	}
+	// Review Phase must not run after a failed Implement.
+	if len(ag.reqs) != 1 {
+		t.Errorf("agent called %d times, want 1 (Implement only)", len(ag.reqs))
+	}
+}
+
+func TestRun_reviewMayBeCommitless(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}}}
+	// Commit only on the Implement Phase (call 1); Review (call 2) is commitless.
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if idx == 1 {
+			writeAndCommit(t, req.Workspace, "impl.txt", "work\n", "implement")
+		}
+		return nil
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7}) {
+		t.Errorf("done = %v, want [7]; commitless Review must still finish", got)
+	}
+}
+
+func TestRun_phaseFailureStopsRun(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when a Phase fails")
+	}
+	if !strings.Contains(err.Error(), "agent boom") {
+		t.Errorf("error = %q, want underlying agent failure", err)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	// Only the first Ticket's Implement Phase ran; the Run stopped.
+	if len(ag.reqs) != 1 {
+		t.Errorf("agent called %d times, want 1", len(ag.reqs))
+	}
+}
+
+// fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
+// Ready for Agent queue so re-listing shrinks like the real tracker.
+type fakeTickets struct {
+	ready    []ticket.Ticket
+	claimed  []int
+	doneList []int
+}
+
+func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error) {
+	out := make([]ticket.Ticket, len(f.ready))
+	copy(out, f.ready)
+	return out, nil
+}
+
+func (f *fakeTickets) Claim(_ context.Context, t ticket.Ticket) error {
+	f.claimed = append(f.claimed, t.Number)
+	return nil
+}
+
+func (f *fakeTickets) Done(_ context.Context, t ticket.Ticket) error {
+	f.doneList = append(f.doneList, t.Number)
+	kept := f.ready[:0]
+	for _, r := range f.ready {
+		if r.Number != t.Number {
+			kept = append(kept, r)
+		}
+	}
+	f.ready = kept
+	return nil
+}
+
+func (f *fakeTickets) Abort(context.Context, ticket.Ticket) error { return nil }
+
+// fakeAgent records Phase requests and defers behavior to handler. The 1-based
+// call index alternates Implement (odd) then Review (even) within a Run.
+type fakeAgent struct {
+	reqs    []agent.PhaseRequest
+	handler func(callIdx int, req agent.PhaseRequest) error
+}
+
+func (f *fakeAgent) RunPhase(_ context.Context, req agent.PhaseRequest) error {
+	f.reqs = append(f.reqs, req)
+	if f.handler != nil {
+		return f.handler(len(f.reqs), req)
+	}
+	return nil
+}
+
+// committingAgent commits on each Implement Phase (odd call) so the side-effect
+// check passes; Review Phases (even calls) are commitless.
+func committingAgent(t *testing.T) *fakeAgent {
+	t.Helper()
+	return &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if idx%2 == 1 {
+			writeAndCommit(t, req.Workspace, fmt.Sprintf("impl-%d.txt", idx), "work\n", "implement work")
+		}
+		return nil
+	}}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func initTempRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "ship@example.com")
+	runGit(t, dir, "config", "user.name", "Ship Test")
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("init\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "README")
+	runGit(t, dir, "commit", "-m", "init")
+	return dir
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	return runGit(t, dir, "branch", "--show-current")
+}
+
+func writeAndCommit(t *testing.T, dir, relPath, contents, message string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, relPath), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", relPath)
+	runGit(t, dir, "commit", "-m", message)
+}
