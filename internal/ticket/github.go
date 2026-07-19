@@ -222,5 +222,25 @@ func (g *GitHub) Abort(ctx context.Context, t Ticket) error {
 	return err
 }
 
+// HasOpenPR reports whether an open pull request exists for branch.
+// Ship uses this to verify the Final Phase opened a PR.
+func (g *GitHub) HasOpenPR(ctx context.Context, branch string) (bool, error) {
+	out, err := g.exec()(ctx, "pr", "list",
+		"--head", branch,
+		"--state", "open",
+		"--json", "number",
+	)
+	if err != nil {
+		return false, err
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return false, fmt.Errorf("parse pr list: %w", err)
+	}
+	return len(prs) > 0, nil
+}
+
 var _ Port = (*GitHub)(nil)
 

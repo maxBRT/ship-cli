@@ -191,6 +191,34 @@ func TestAbort_restoresReadyForAgent(t *testing.T) {
 	}
 }
 
+func TestHasOpenPR_trueWhenOpenPRExistsForBranch(t *testing.T) {
+	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
+		"pr list --head ship/run --state open --json number": `[{"number":42}]`,
+	})}
+
+	open, err := gh.HasOpenPR(context.Background(), "ship/run")
+	if err != nil {
+		t.Fatalf("HasOpenPR: %v", err)
+	}
+	if !open {
+		t.Fatal("HasOpenPR = false, want true when an open PR exists")
+	}
+}
+
+func TestHasOpenPR_falseWhenNone(t *testing.T) {
+	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
+		"pr list --head ship/run --state open --json number": `[]`,
+	})}
+
+	open, err := gh.HasOpenPR(context.Background(), "ship/run")
+	if err != nil {
+		t.Fatalf("HasOpenPR: %v", err)
+	}
+	if open {
+		t.Fatal("HasOpenPR = true, want false when no open PR")
+	}
+}
+
 func numbers(ts []ticket.Ticket) []int {
 	out := make([]int, len(ts))
 	for i, t := range ts {

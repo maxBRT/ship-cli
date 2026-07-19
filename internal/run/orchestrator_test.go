@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
@@ -50,12 +51,14 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
-	ag := committingAgent(t)
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
 	var out strings.Builder
 
 	r := run.Orchestrator{
 		Tickets: tickets,
 		Agent:   ag,
+		PRs:     prs,
 		Repo:    gitops.Repo{Dir: dir},
 		Config:  run.Config{Branch: "ship/run", MaxIterations: 10, Model: "composer"},
 		Stdout:  &out,
@@ -73,9 +76,9 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
 		t.Errorf("done = %v, want [7 8]", got)
 	}
-	// Two Phases (Implement, Review) per Ticket.
-	if len(ag.reqs) != 4 {
-		t.Fatalf("agent called %d times, want 4", len(ag.reqs))
+	// Two Phases (Implement, Review) per Ticket, then Final.
+	if len(ag.reqs) != 5 {
+		t.Fatalf("agent called %d times, want 5", len(ag.reqs))
 	}
 	// Each Phase gets the checkout as its workspace and the configured model.
 	for i, req := range ag.reqs {
@@ -95,15 +98,160 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 	}
 }
 
-func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
+func TestRun_skipsFinalWhenNoSuccessfulIteration(t *testing.T) {
 	dir := initTempRepo(t)
-	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}, {Number: 9}}}
-	ag := committingAgent(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	prs := &fakePRs{}
+	ag := &fakeAgent{}
 	var out strings.Builder
 
 	r := run.Orchestrator{
 		Tickets: tickets,
 		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 0},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(ag.reqs) != 0 {
+		t.Fatalf("agent called %d times, want 0 (no Iteration, so no Final)", len(ag.reqs))
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
+	if open {
+		t.Error("no PR should be recorded when Final never runs")
+	}
+}
+
+func TestRun_finalPhaseRunsAfterQueueDrains(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Implement, Review, then Final.
+	if len(ag.reqs) != 3 {
+		t.Fatalf("agent called %d times, want 3 (Implement, Review, Final)", len(ag.reqs))
+	}
+	finalPrompt := ag.reqs[2].Prompt
+	if !strings.Contains(finalPrompt, "ship/run") {
+		t.Errorf("Final prompt missing branch:\n%s", finalPrompt)
+	}
+	if !strings.Contains(finalPrompt, "#7") || !strings.Contains(finalPrompt, "seven") {
+		t.Errorf("Final prompt missing Done Ticket:\n%s", finalPrompt)
+	}
+	if strings.Contains(strings.ToLower(finalPrompt), "partial progress") {
+		t.Errorf("drain Final must not disclose Partial Progress:\n%s", finalPrompt)
+	}
+	if !strings.Contains(out.String(), "Queue drained") {
+		t.Errorf("stdout = %q, want drain summary", out.String())
+	}
+}
+
+func TestRun_finalWithoutOpenedPRFails(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	// Agent succeeds every Phase but never opens a PR.
+	ag := committingAgent(t, nil, "")
+	prs := &fakePRs{}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Final opens no pull request")
+	}
+	if !strings.Contains(err.Error(), "Abort") {
+		t.Errorf("error = %q, want Abort summary", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "pull request") {
+		t.Errorf("error = %q, want mention of missing pull request", err)
+	}
+}
+
+func TestRun_finalPhaseFailureAbortsRun(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	prs := &fakePRs{}
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if isFinalPrompt(req.Prompt) {
+			return errors.New("final agent boom")
+		}
+		if idx == 1 {
+			writeAndCommit(t, req.Workspace, "impl.txt", "work\n", "implement")
+		}
+		return nil
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Final Phase fails")
+	}
+	if !strings.Contains(err.Error(), "Abort") {
+		t.Errorf("error = %q, want Abort summary", err)
+	}
+	if !strings.Contains(err.Error(), "final agent boom") {
+		t.Errorf("error = %q, want underlying Final failure", err)
+	}
+	if !strings.Contains(err.Error(), "Final") {
+		t.Errorf("error = %q, want Final Phase context", err)
+	}
+	// Ticket was already Done before Final; Abort does not reopen Done Tickets.
+	if got := tickets.doneList; !equalInts(got, []int{7}) {
+		t.Errorf("done = %v, want [7]", got)
+	}
+	if len(tickets.aborted) != 0 {
+		t.Errorf("aborted = %v, want none (Final has no In Progress Ticket)", tickets.aborted)
+	}
+	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
+	if open {
+		t.Error("no PR should be recorded when Final Agent fails")
+	}
+}
+
+func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}, {Number: 9}}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
 		Repo:    gitops.Repo{Dir: dir},
 		Config:  run.Config{Branch: "ship/run", MaxIterations: 2},
 		Stdout:  &out,
@@ -120,6 +268,17 @@ func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "max iterations") {
 		t.Errorf("stdout = %q, want partial-progress message", out.String())
+	}
+	// Implement+Review for two Tickets, then Final with Partial Progress.
+	if len(ag.reqs) != 5 {
+		t.Fatalf("agent called %d times, want 5 (4 Iteration + Final)", len(ag.reqs))
+	}
+	finalPrompt := ag.reqs[4].Prompt
+	if !strings.Contains(strings.ToLower(finalPrompt), "partial progress") {
+		t.Errorf("Final prompt must disclose Partial Progress:\n%s", finalPrompt)
+	}
+	if !strings.Contains(finalPrompt, "2") {
+		t.Errorf("Final prompt must include max iterations (2):\n%s", finalPrompt)
 	}
 }
 
@@ -156,11 +315,109 @@ func TestRun_implementWithoutCommitFailsAndDoesNotMarkDone(t *testing.T) {
 	}
 }
 
+func TestRun_implementWithoutCommitAbortsTicket(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error { return nil }}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Implement commits nothing")
+	}
+	if got := tickets.aborted; !equalInts(got, []int{7}) {
+		t.Errorf("aborted = %v, want [7] (side-effect miss Aborts)", got)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7}) {
+		t.Errorf("claimed = %v, want [7] only (no further Tickets)", got)
+	}
+}
+
+func TestRun_phaseTimeoutAbortsTicket(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}}}
+	timeout := 50 * time.Millisecond
+	ag := &fakeAgent{handler: func(_ int, req agent.PhaseRequest) error {
+		if req.Timeout != timeout {
+			return fmt.Errorf("PhaseRequest.Timeout = %v, want %v", req.Timeout, timeout)
+		}
+		return context.DeadlineExceeded
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10, Timeout: timeout},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Phase times out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("error = %q, want timeout/deadline", err)
+	}
+	if got := tickets.aborted; !equalInts(got, []int{7}) {
+		t.Errorf("aborted = %v, want [7] (timeout Aborts like other Phase failures)", got)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7}) {
+		t.Errorf("claimed = %v, want [7] only", got)
+	}
+}
+
+func TestRun_abortErrorSummarizesWhy(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want Abort error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Abort") {
+		t.Errorf("error = %q, want Abort summary", msg)
+	}
+	if !strings.Contains(msg, "agent boom") {
+		t.Errorf("error = %q, want underlying reason", msg)
+	}
+	if !strings.Contains(msg, "#7") && !strings.Contains(msg, "Ticket") {
+		t.Errorf("error = %q, want Ticket context", msg)
+	}
+}
+
 func TestRun_reviewMayBeCommitless(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}}}
+	prs := &fakePRs{}
 	// Commit only on the Implement Phase (call 1); Review (call 2) is commitless.
 	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if isFinalPrompt(req.Prompt) {
+			prs.openPR("ship/run")
+			return nil
+		}
 		if idx == 1 {
 			writeAndCommit(t, req.Workspace, "impl.txt", "work\n", "implement")
 		}
@@ -170,6 +427,7 @@ func TestRun_reviewMayBeCommitless(t *testing.T) {
 	r := run.Orchestrator{
 		Tickets: tickets,
 		Agent:   ag,
+		PRs:     prs,
 		Repo:    gitops.Repo{Dir: dir},
 		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
 		Stdout:  &strings.Builder{},
@@ -212,12 +470,91 @@ func TestRun_phaseFailureStopsRun(t *testing.T) {
 	}
 }
 
+func TestRun_phaseFailureAbortsTicketToReadyForAgent(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when a Phase fails")
+	}
+	if got := tickets.aborted; !equalInts(got, []int{7}) {
+		t.Errorf("aborted = %v, want [7] (restored to Ready for Agent)", got)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	// Abort must stop the Run: no Review, no Ticket 8, no Final.
+	if len(ag.reqs) != 1 {
+		t.Errorf("agent called %d times, want 1 (Implement only)", len(ag.reqs))
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7}) {
+		t.Errorf("claimed = %v, want [7] only", got)
+	}
+}
+
+func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if idx == 1 {
+			writeAndCommit(t, req.Workspace, "impl.txt", "work\n", "implement")
+			return nil
+		}
+		return errors.New("review boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+
+	before := headSHA(t, dir)
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want error when Review Phase fails")
+	}
+	if !strings.Contains(err.Error(), "review boom") {
+		t.Errorf("error = %q, want underlying Review failure", err)
+	}
+	if got := tickets.aborted; !equalInts(got, []int{7}) {
+		t.Errorf("aborted = %v, want [7]", got)
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	if head := headSHA(t, dir); head != before {
+		t.Errorf("HEAD after Abort = %q, want restore point %q (Ticket commits undone)", head, before)
+	}
+	// No further Tickets or Final after Abort.
+	if len(ag.reqs) != 2 {
+		t.Errorf("agent called %d times, want 2 (Implement + Review)", len(ag.reqs))
+	}
+	if got := tickets.claimed; !equalInts(got, []int{7}) {
+		t.Errorf("claimed = %v, want [7] only", got)
+	}
+}
+
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
 // Ready for Agent queue so re-listing shrinks like the real tracker.
 type fakeTickets struct {
 	ready    []ticket.Ticket
 	claimed  []int
 	doneList []int
+	aborted  []int
 }
 
 func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error) {
@@ -243,7 +580,30 @@ func (f *fakeTickets) Done(_ context.Context, t ticket.Ticket) error {
 	return nil
 }
 
-func (f *fakeTickets) Abort(context.Context, ticket.Ticket) error { return nil }
+func (f *fakeTickets) Abort(_ context.Context, t ticket.Ticket) error {
+	f.aborted = append(f.aborted, t.Number)
+	return nil
+}
+
+// fakePRs reports which branches have an open pull request. Final success
+// requires HasOpenPR to return true for the Run branch after the Agent exits.
+type fakePRs struct {
+	open map[string]bool
+}
+
+func (f *fakePRs) HasOpenPR(_ context.Context, branch string) (bool, error) {
+	if f.open == nil {
+		return false, nil
+	}
+	return f.open[branch], nil
+}
+
+func (f *fakePRs) openPR(branch string) {
+	if f.open == nil {
+		f.open = map[string]bool{}
+	}
+	f.open[branch] = true
+}
 
 // fakeAgent records Phase requests and defers behavior to handler. The 1-based
 // call index alternates Implement (odd) then Review (even) within a Run.
@@ -260,16 +620,27 @@ func (f *fakeAgent) RunPhase(_ context.Context, req agent.PhaseRequest) error {
 	return nil
 }
 
-// committingAgent commits on each Implement Phase (odd call) so the side-effect
-// check passes; Review Phases (even calls) are commitless.
-func committingAgent(t *testing.T) *fakeAgent {
+// committingAgent commits on each Implement Phase so the side-effect check
+// passes; Review Phases are commitless. When prs is non-nil, Final opens a
+// pull request for branch (the side effect Ship verifies after Final).
+func committingAgent(t *testing.T, prs *fakePRs, branch string) *fakeAgent {
 	t.Helper()
 	return &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if isFinalPrompt(req.Prompt) {
+			if prs != nil {
+				prs.openPR(branch)
+			}
+			return nil
+		}
 		if idx%2 == 1 {
 			writeAndCommit(t, req.Workspace, fmt.Sprintf("impl-%d.txt", idx), "work\n", "implement work")
 		}
 		return nil
 	}}
+}
+
+func isFinalPrompt(prompt string) bool {
+	return strings.Contains(prompt, "Exiting without an opened PR is a failure")
 }
 
 func equalInts(a, b []int) bool {
@@ -312,6 +683,11 @@ func runGit(t *testing.T, dir string, args ...string) string {
 func currentBranch(t *testing.T, dir string) string {
 	t.Helper()
 	return runGit(t, dir, "branch", "--show-current")
+}
+
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	return runGit(t, dir, "rev-parse", "HEAD")
 }
 
 func writeAndCommit(t *testing.T, dir, relPath, contents, message string) {
