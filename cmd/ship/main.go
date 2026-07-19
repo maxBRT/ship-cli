@@ -37,9 +37,11 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		return 1
 	}
 
+	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
-		Tickets: &ticket.GitHub{},
+		Tickets: gh,
 		Agent:   agent.Cursor{Bin: cfg.Agent},
+		PRs:     gh,
 		Repo:    gitops.Repo{Dir: dir},
 		Config:  cfg,
 		Stdout:  stdout,

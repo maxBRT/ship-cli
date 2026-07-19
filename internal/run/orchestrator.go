@@ -17,9 +17,16 @@ import (
 type Orchestrator struct {
 	Tickets ticket.Port
 	Agent   agent.Port
+	PRs     PullRequests
 	Repo    gitops.Repo
 	Config  Config
 	Stdout  io.Writer
+}
+
+// PullRequests is the side-effect seam Final success is checked against: an
+// open pull request for the Run branch after the Final Agent exits 0.
+type PullRequests interface {
+	HasOpenPR(ctx context.Context, branch string) (bool, error)
 }
 
 // Run executes one Ship Run in the current checkout.
@@ -27,8 +34,7 @@ type Orchestrator struct {
 // With no Ready for Agent Tickets it reports that and returns without touching
 // the branch. Otherwise it prepares the Run branch, then processes Tickets one
 // Iteration each (Implement Phase then Review Phase) up to the max-iterations
-// limit, stopping when the queue drains or the limit is hit. The Final Phase is
-// wired in a later Ticket; here it is a clean stop point.
+// limit, stopping when the queue drains or the limit is hit, then runs Final.
 func (r Orchestrator) Run(ctx context.Context) error {
 	ready, err := r.Tickets.ListReady(ctx, r.Config.Feature)
 	if err != nil {
@@ -106,14 +112,35 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	return nil
 }
 
-// final is the end-of-run stop point. The Final Phase (branch review and pull
-// request) is wired in a later Ticket; for now it only reports the outcome so
-// the Run ends cleanly before Final.
-func (r Orchestrator) final(_ context.Context, _ string, done []ticket.Ticket, partial bool) error {
+// final runs the Final Phase: a fresh Agent invocation with the built-in Final
+// prompt (branch review / green bar / open PR). Partial Progress is disclosed
+// in the prompt when the Run stopped at max iterations with work remaining.
+func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ticket, partial bool) error {
 	if partial {
 		fmt.Fprintf(r.stdout(), "Stopped at max iterations (%d) with Ready for Agent Tickets remaining; %d Ticket(s) Done.\n", r.Config.MaxIterations, len(done))
 	} else {
 		fmt.Fprintf(r.stdout(), "Queue drained; %d Ticket(s) Done.\n", len(done))
+	}
+
+	tickets := make([]prompt.TicketInput, len(done))
+	for i, t := range done {
+		tickets[i] = ticketInput(t)
+	}
+	finalPrompt := prompt.Final(prompt.FinalInput{
+		Branch:          branch,
+		Tickets:         tickets,
+		PartialProgress: partial,
+		MaxIterations:   r.Config.MaxIterations,
+	})
+	if err := r.runPhase(ctx, finalPrompt); err != nil {
+		return fmt.Errorf("Final Phase: %w", err)
+	}
+	open, err := r.PRs.HasOpenPR(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("check Final pull request for %s: %w", branch, err)
+	}
+	if !open {
+		return fmt.Errorf("Final Phase produced no open pull request for branch %s", branch)
 	}
 	return nil
 }
