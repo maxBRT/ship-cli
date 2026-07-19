@@ -13,8 +13,9 @@ import (
 
 // Orchestrator wires the Ship Run loop over its ports: it Claims Ready for
 // Agent Tickets, drives an Implement then a Review Phase per Iteration, marks
-// each Ticket Done, then runs Final and verifies an open pull request. Ports
-// stay behind interfaces so tests can fake them.
+// each Ticket Done, then runs Final and verifies an open pull request. Phase
+// failure Aborts (restore Ticket, undo commits, stop). Ports stay behind
+// interfaces so tests can fake them.
 type Orchestrator struct {
 	Tickets ticket.Port
 	Agent   agent.Port
@@ -36,6 +37,7 @@ type PullRequests interface {
 // the branch. Otherwise it prepares the Run branch, then processes Tickets one
 // Iteration each (Implement Phase then Review Phase) up to the max-iterations
 // limit, stopping when the queue drains or the limit is hit, then runs Final.
+// A failed Phase, missing side effect, or timeout Aborts the Run.
 func (r Orchestrator) Run(ctx context.Context) error {
 	ready, err := r.Tickets.ListReady(ctx, r.Config.Feature)
 	if err != nil {
@@ -80,8 +82,8 @@ func (r Orchestrator) Run(ctx context.Context) error {
 
 // iterate runs one Ticket through a single Iteration: Claim, the Implement
 // Phase (which must commit), the Review Phase (which may be commitless), then
-// Done. A failed Phase or missing side effect returns an error; full Abort
-// restore is a later Ticket.
+// Done. A failed Phase or missing side effect Aborts: restores the Ticket to
+// Ready for Agent, undoes that Ticket's commits, and stops the Run.
 func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string) error {
 	if err := r.Tickets.Claim(ctx, t); err != nil {
 		return fmt.Errorf("claim Ticket #%d: %w", t.Number, err)
@@ -89,25 +91,25 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 
 	restore, err := r.Repo.RecordRestorePoint()
 	if err != nil {
-		return fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err)
+		return r.abort(ctx, t, gitops.RestorePoint(""), fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err))
 	}
 
 	implInput := prompt.ImplementInput{Ticket: ticketInput(t), Branch: branch}
 	if err := r.runPhase(ctx, prompt.Implement(implInput)); err != nil {
-		return fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err)
+		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
 	}
 
 	committed, err := r.Repo.HasCommitsSince(restore)
 	if err != nil {
-		return fmt.Errorf("check Implement commits for Ticket #%d: %w", t.Number, err)
+		return r.abort(ctx, t, restore, fmt.Errorf("check Implement commits for Ticket #%d: %w", t.Number, err))
 	}
 	if !committed {
-		return fmt.Errorf("Implement Phase for Ticket #%d produced no commit(s)", t.Number)
+		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d produced no commit(s)", t.Number))
 	}
 
 	reviewInput := prompt.ReviewInput{Ticket: ticketInput(t), Branch: branch}
 	if err := r.runPhase(ctx, prompt.Review(reviewInput)); err != nil {
-		return fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err)
+		return r.abort(ctx, t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
 	}
 
 	if err := r.Tickets.Done(ctx, t); err != nil {
@@ -115,6 +117,20 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 	fmt.Fprintf(r.stdout(), "Ticket #%d Done\n", t.Number)
 	return nil
+}
+
+// abort restores the Ticket to Ready for Agent, undoes that Ticket's commits
+// on the Run branch, and returns a clear Abort summary wrapping cause.
+func (r Orchestrator) abort(ctx context.Context, t ticket.Ticket, restore gitops.RestorePoint, cause error) error {
+	if err := r.Tickets.Abort(ctx, t); err != nil {
+		return fmt.Errorf("Abort: restore Ticket #%d failed after (%v): %w", t.Number, cause, err)
+	}
+	if restore != "" {
+		if err := r.Repo.UndoToRestorePoint(restore); err != nil {
+			return fmt.Errorf("Abort: undo commits for Ticket #%d failed after (%v): %w", t.Number, cause, err)
+		}
+	}
+	return fmt.Errorf("Abort: %w", cause)
 }
 
 // final runs the Final Phase: a fresh Agent invocation with the built-in Final
@@ -138,14 +154,14 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 		MaxIterations:   r.Config.MaxIterations,
 	})
 	if err := r.runPhase(ctx, finalPrompt); err != nil {
-		return fmt.Errorf("Final Phase: %w", err)
+		return fmt.Errorf("Abort: Final Phase: %w", err)
 	}
 	open, err := r.PRs.HasOpenPR(ctx, branch)
 	if err != nil {
-		return fmt.Errorf("check Final pull request for %s: %w", branch, err)
+		return fmt.Errorf("Abort: check Final pull request for %s: %w", branch, err)
 	}
 	if !open {
-		return fmt.Errorf("Final Phase produced no open pull request for branch %s", branch)
+		return fmt.Errorf("Abort: Final Phase produced no open pull request for branch %s", branch)
 	}
 	return nil
 }
