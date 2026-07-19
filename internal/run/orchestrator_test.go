@@ -97,6 +97,36 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 	}
 }
 
+func TestRun_skipsFinalWhenNoSuccessfulIteration(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	prs := &fakePRs{}
+	ag := &fakeAgent{}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 0},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(ag.reqs) != 0 {
+		t.Fatalf("agent called %d times, want 0 (no Iteration, so no Final)", len(ag.reqs))
+	}
+	if len(tickets.doneList) != 0 {
+		t.Errorf("done = %v, want none", tickets.doneList)
+	}
+	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
+	if open {
+		t.Error("no PR should be recorded when Final never runs")
+	}
+}
+
 func TestRun_finalPhaseRunsAfterQueueDrains(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}

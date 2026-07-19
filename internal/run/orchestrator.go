@@ -12,8 +12,9 @@ import (
 )
 
 // Orchestrator wires the Ship Run loop over its ports: it Claims Ready for
-// Agent Tickets, drives an Implement then a Review Phase per Iteration, and
-// marks each Ticket Done. Ports stay behind interfaces so tests can fake them.
+// Agent Tickets, drives an Implement then a Review Phase per Iteration, marks
+// each Ticket Done, then runs Final and verifies an open pull request. Ports
+// stay behind interfaces so tests can fake them.
 type Orchestrator struct {
 	Tickets ticket.Port
 	Agent   agent.Port
@@ -69,6 +70,10 @@ func (r Orchestrator) Run(ctx context.Context) error {
 		}
 	}
 
+	// Final only when at least one Iteration succeeded ("when there was work").
+	if len(done) == 0 {
+		return nil
+	}
 	partial := iterations >= r.Config.MaxIterations && len(ready) > 0
 	return r.final(ctx, branch, done, partial)
 }
