@@ -25,7 +25,19 @@ func TestImplement_requiresCommitAndIncludesTicketContext(t *testing.T) {
 		"ship/abc123",
 	)
 	assertContainsFold(t, got,
+		"at least one git commit",
 		"must commit",
+		"red before green",
+		"pre-agreed seams",
+		"implementation-coupled",
+		"tautological",
+		"horizontal slicing",
+		"vertical slices",
+	)
+	assertNotContainsFold(t, got,
+		"/tdd",
+		"ship run",
+		"implement phase",
 	)
 }
 
@@ -34,7 +46,7 @@ func TestReview_allowsCommitlessSinglePass(t *testing.T) {
 		Ticket: prompt.TicketInput{
 			Number: 9,
 			Title:  "Built-in prompts for Implement, Review, and Final",
-			Body:   "Review the Implement commits for this Ticket.",
+			Body:   "Acceptance: review recent commits for this issue.",
 		},
 		Branch: "ship/abc123",
 	})
@@ -42,13 +54,20 @@ func TestReview_allowsCommitlessSinglePass(t *testing.T) {
 	assertContains(t, got,
 		"#9",
 		"Built-in prompts for Implement, Review, and Final",
-		"Review the Implement commits for this Ticket.",
+		"Acceptance: review recent commits for this issue.",
 		"ship/abc123",
 	)
 	assertContainsFold(t, got,
 		"single pass",
-		"may adjust",
 		"without a new commit",
+		"standards",
+		"spec",
+		"smell baseline",
+	)
+	assertNotContainsFold(t, got,
+		"/code-review",
+		"ship run",
+		"review phase",
 	)
 }
 
@@ -71,16 +90,25 @@ func TestFinal_opensPRWithRiskQAAndLinkedTickets(t *testing.T) {
 		"Cursor Agent adapter",
 	)
 	assertContainsFold(t, got,
+		"integration review",
 		"tests",
 		"e2e",
+		"lint",
+		"typecheck",
 		"open a pull request",
 		"RISK",
 		"QA",
-		"opens a pull request",
+		"happy path",
+		"out of scope",
+		"commit",
+		"opened pr",
 	)
 	assertNotContainsFold(t, got,
 		"partial progress",
 		"max iterations",
+		"final phase",
+		"ship run",
+		"light final",
 	)
 }
 
@@ -98,6 +126,13 @@ func TestFinal_disclosesPartialProgressWhenFlagSet(t *testing.T) {
 		"partial progress",
 		"max iterations",
 		"10",
+		"skip the deep",
+		"green bar",
+		"open",
+		"pull request",
+	)
+	assertNotContainsFold(t, got,
+		"branch-level integration review",
 	)
 }
 
