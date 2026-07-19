@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,39 @@ import (
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
+
+func TestRun_wrapsEachPhaseInThrobberDuring(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 1, Title: "one"}}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	th := &recordingThrobber{}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		PRs:      prs,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Throbber: th,
+		Stdout:   &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []string{"Implement", "Review", "Final"}
+	if got := th.phases; !slices.Equal(got, want) {
+		t.Errorf("throbber phases = %v, want %v", got, want)
+	}
+	if th.workCalls != 3 {
+		t.Errorf("throbber work calls = %d, want 3", th.workCalls)
+	}
+	if len(ag.reqs) != 3 {
+		t.Fatalf("agent called %d times, want 3", len(ag.reqs))
+	}
+}
 
 func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 	dir := initTempRepo(t)
@@ -546,6 +580,18 @@ func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
 	if got := tickets.claimed; !equalInts(got, []int{7}) {
 		t.Errorf("claimed = %v, want [7] only", got)
 	}
+}
+
+// recordingThrobber records Phase labels and that work ran inside During.
+type recordingThrobber struct {
+	phases    []string
+	workCalls int
+}
+
+func (r *recordingThrobber) During(ctx context.Context, phase string, work func(context.Context) error) error {
+	r.phases = append(r.phases, phase)
+	r.workCalls++
+	return work(ctx)
 }
 
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the

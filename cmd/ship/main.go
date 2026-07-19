@@ -11,8 +11,8 @@ import (
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
 	"github.com/maxBRT/ship-cli/internal/run"
+	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
-	"github.com/maxBRT/ship-cli/internal/throbber/prototype"
 )
 
 func main() {
@@ -22,11 +22,6 @@ func main() {
 // Main is the testable CLI entrypoint. It parses Run configuration and drives
 // the Run orchestrator over the checkout in dir.
 func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, dir string) int {
-	// PROTOTYPE: independent throbber demo — not part of the Run loop.
-	if len(args) > 0 && args[0] == "throbber" {
-		return prototype.Demo(args[1:], stdout, stderr)
-	}
-
 	cfg, err := run.ParseConfig(args, getenv)
 	if errors.Is(err, flag.ErrHelp) {
 		run.WriteUsage(stdout)
@@ -37,14 +32,16 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		return 1
 	}
 
+	color := getenv("NO_COLOR") == ""
 	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
-		Tickets: gh,
-		Agent:   agent.Cursor{Bin: cfg.Agent},
-		PRs:     gh,
-		Repo:    gitops.Repo{Dir: dir},
-		Config:  cfg,
-		Stdout:  stdout,
+		Tickets:  gh,
+		Agent:    agent.Cursor{Bin: cfg.Agent},
+		PRs:      gh,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   cfg,
+		Throbber: throbber.Tableau{Out: stderr, Color: color},
+		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {
 		fmt.Fprintln(stderr, err)

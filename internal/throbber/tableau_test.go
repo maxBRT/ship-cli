@@ -1,16 +1,12 @@
-package prototype
+package throbber
 
 import (
-	"bytes"
-	"context"
 	"math/rand"
 	"testing"
 	"time"
 )
 
 func TestRenderFrame_noPanicOnPlume(t *testing.T) {
-	// Repro: frame 0 with tip flare (dx=-1) made Go's % return a negative
-	// flicker index and panic with "index out of range [-1]".
 	rng := rand.New(rand.NewSource(1))
 	stars := seedStars(80, 24, rng)
 	for frame := 0; frame < 120; frame++ {
@@ -21,7 +17,7 @@ func TestRenderFrame_noPanicOnPlume(t *testing.T) {
 				}
 			}()
 			_ = renderFrame(80, 24, frame, time.Duration(frame)*50*time.Millisecond,
-				Options{Phase: "Implement", Color: true}, stars, rng)
+				"Implement", true, stars)
 		}()
 	}
 }
@@ -36,16 +32,5 @@ func TestDrawPlume_negativeModuloSafe(t *testing.T) {
 			t.Fatalf("drawPlume panicked: %v", r)
 		}
 	}()
-	// Conditions that previously yielded fi == -1 from Go's signed %.
-	drawPlume(buf, 13, 10, 40, 18, true, 0, 0)
-}
-
-func TestRun_nonTTY(t *testing.T) {
-	var buf bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	Run(ctx, &buf, Options{Phase: "Implement", Color: false})
-	if buf.Len() == 0 {
-		t.Fatal("expected non-TTY waiting lines")
-	}
+	drawPlume(buf, 13, 10, 40, 18, true, 0)
 }

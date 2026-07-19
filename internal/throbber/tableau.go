@@ -1,10 +1,4 @@
-// Package prototype is a THROWAWAY UI sandbox for the phase-wait throbber.
-//
-// Question: what should the per-phase wait indicator look like?
-// Run: ship throbber
-//
-// Full-screen vertical rocket ascending into night sky — not production. See NOTES.md.
-package prototype
+package throbber
 
 import (
 	"context"
@@ -19,71 +13,61 @@ import (
 	"unsafe"
 )
 
-// Options control a demo (or future phase wait).
-type Options struct {
-	Phase string
+// Tableau is the production Phase-wait UI: full-screen rocket ascent on a TTY,
+// plain waiting lines otherwise.
+type Tableau struct {
+	Out   io.Writer
 	Color bool
 }
 
-type cell struct {
-	ch rune
-	fg string // ANSI SGR params, e.g. "38;2;r;g;b" or ""
-}
+var _ Port = Tableau{}
 
-// Run draws the rocket tableau until ctx is done, then restores the terminal.
-func Run(ctx context.Context, w io.Writer, opts Options) {
-	if opts.Phase == "" {
-		opts.Phase = "Implement"
+// During shows wait UI for phase until work returns, then finishes succeed/fail
+// from work's error. Always restores the terminal before returning.
+func (t Tableau) During(ctx context.Context, phase string, work func(context.Context) error) error {
+	if phase == "" {
+		phase = "Implement"
 	}
-	if !isTTY(w) {
-		fmt.Fprintf(w, "ship: waiting on %s…\n", opts.Phase)
-		<-ctx.Done()
-		fmt.Fprintf(w, "ship: %s done\n", opts.Phase)
-		return
+	out := t.Out
+	if out == nil {
+		out = io.Discard
 	}
+	start := time.Now()
 
-	cols, rows := termSize(w)
-	if cols < 40 {
-		cols = 40
-	}
-	if rows < 16 {
-		rows = 16
+	if !isTTY(out) {
+		fmt.Fprintf(out, "ship: waiting on %s…\n", phase)
+		err := work(ctx)
+		fmt.Fprintln(out, finishLine(phase, t.Color, err == nil, time.Since(start)))
+		return err
 	}
 
-	enterAlt(w)
-	hideCursor(w)
-	defer func() {
-		showCursor(w)
-		leaveAlt(w)
+	uiCtx, stopUI := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runTableau(uiCtx, out, phase, t.Color)
 	}()
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	stars := seedStars(cols, rows, rng)
-	start := time.Now()
-	tick := time.NewTicker(70 * time.Millisecond)
-	defer tick.Stop()
-
-	frame := 0
-	for {
-		select {
-		case <-ctx.Done():
-			clearScreen(w)
-			fmt.Fprintf(w, "%s\n", finishLine(opts, time.Since(start)))
-			return
-		case <-tick.C:
-			buf := renderFrame(cols, rows, frame, time.Since(start), opts, stars, rng)
-			paint(w, buf, cols, rows)
-			frame++
-		}
-	}
+	err := work(ctx)
+	stopUI()
+	<-done
+	fmt.Fprintln(out, finishLine(phase, t.Color, err == nil, time.Since(start)))
+	return err
 }
 
-func finishLine(opts Options, d time.Duration) string {
+func finishLine(phase string, color, ok bool, d time.Duration) string {
+	if !ok {
+		mark := "✗"
+		if color {
+			mark = "\033[38;2;220;90;90m✗\033[0m"
+		}
+		return fmt.Sprintf("%s  %s failed  ·  %s", mark, phase, formatDur(d))
+	}
 	check := "✓"
-	if opts.Color {
+	if color {
 		check = "\033[38;2;120;200;140m✓\033[0m"
 	}
-	return fmt.Sprintf("%s  %s  ·  %s", check, opts.Phase, formatDur(d))
+	return fmt.Sprintf("%s  %s  ·  %s", check, phase, formatDur(d))
 }
 
 func formatDur(d time.Duration) string {
@@ -128,6 +112,11 @@ func hideCursor(w io.Writer)  { fmt.Fprint(w, "\033[?25l") }
 func showCursor(w io.Writer)  { fmt.Fprint(w, "\033[?25h") }
 func clearScreen(w io.Writer) { fmt.Fprint(w, "\033[2J\033[H") }
 
+type cell struct {
+	ch rune
+	fg string // ANSI SGR params, e.g. "38;2;r;g;b" or ""
+}
+
 type star struct {
 	x, y   int
 	phase  float64
@@ -135,7 +124,6 @@ type star struct {
 }
 
 func seedStars(cols, rows int, rng *rand.Rand) []star {
-	// Sparse quiet sky — leave HUD alone.
 	skyH := rows - 4
 	if skyH < 8 {
 		skyH = rows
@@ -153,7 +141,7 @@ func seedStars(cols, rows int, rng *rand.Rand) []star {
 			x:      rng.Intn(cols),
 			y:      rng.Intn(skyH),
 			phase:  rng.Float64() * 2 * math.Pi,
-			bright: rng.Intn(4), // most stay dim
+			bright: rng.Intn(4),
 		}
 	}
 	return out
@@ -170,7 +158,45 @@ var rocketArt = []string{
 
 const rocketArtWidth = 8
 
-func renderFrame(cols, rows int, frame int, elapsed time.Duration, opts Options, stars []star, rng *rand.Rand) [][]cell {
+// runTableau draws the rocket tableau until ctx is done, then restores the terminal.
+// It does not print a finish line — During owns succeed/fail chrome after restore.
+func runTableau(ctx context.Context, w io.Writer, phase string, color bool) {
+	cols, rows := termSize(w)
+	if cols < 40 {
+		cols = 40
+	}
+	if rows < 16 {
+		rows = 16
+	}
+
+	enterAlt(w)
+	hideCursor(w)
+	defer func() {
+		showCursor(w)
+		leaveAlt(w)
+	}()
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	stars := seedStars(cols, rows, rng)
+	start := time.Now()
+	tick := time.NewTicker(70 * time.Millisecond)
+	defer tick.Stop()
+
+	frame := 0
+	for {
+		select {
+		case <-ctx.Done():
+			clearScreen(w)
+			return
+		case <-tick.C:
+			buf := renderFrame(cols, rows, frame, time.Since(start), phase, color, stars)
+			paint(w, buf, cols, rows)
+			frame++
+		}
+	}
+}
+
+func renderFrame(cols, rows int, frame int, elapsed time.Duration, phase string, color bool, stars []star) [][]cell {
 	buf := make([][]cell, rows)
 	for y := 0; y < rows; y++ {
 		buf[y] = make([]cell, cols)
@@ -181,11 +207,8 @@ func renderFrame(cols, rows int, frame int, elapsed time.Duration, opts Options,
 
 	hudH := 2
 	skyBot := rows - hudH
-	color := opts.Color
 	t := float64(frame) * 0.05
-	_ = rng
 
-	// Flat deep space — no busy gradient fill noise
 	bg := cRGB(color, 8, 10, 22)
 	for y := 0; y < skyBot; y++ {
 		for x := 0; x < cols; x++ {
@@ -193,7 +216,6 @@ func renderFrame(cols, rows int, frame int, elapsed time.Duration, opts Options,
 		}
 	}
 
-	// Quiet stars + very slow downward drift
 	starScroll := frame / 6
 	for _, s := range stars {
 		sy := (s.y + starScroll) % max(1, skyBot)
@@ -210,7 +232,6 @@ func renderFrame(cols, rows int, frame int, elapsed time.Duration, opts Options,
 		buf[sy][s.x] = cell{ch: ch, fg: fg}
 	}
 
-	// One compact rocket, almost still (tiny bob only); twin exhaust under fins.
 	rocketH := len(rocketArt)
 	plumeRoom := 4
 	baseY := (skyBot-rocketH-plumeRoom)/2 + int(math.Round(math.Sin(t*0.5)))
@@ -221,16 +242,15 @@ func renderFrame(cols, rows int, frame int, elapsed time.Duration, opts Options,
 		baseY = max(0, skyBot-rocketH-plumeRoom)
 	}
 	shipX := cols/2 - rocketArtWidth/2
-	drawRocket(buf, shipX, baseY, color, t)
-	// Plumes under each `=` in the base row (`/|= =|\`).
-	drawPlume(buf, shipX+2, baseY+rocketH, cols, skyBot, color, t, frame)
-	drawPlume(buf, shipX+4, baseY+rocketH, cols, skyBot, color, t, frame)
+	drawRocket(buf, shipX, baseY, color)
+	drawPlume(buf, shipX+2, baseY+rocketH, cols, skyBot, color, t)
+	drawPlume(buf, shipX+4, baseY+rocketH, cols, skyBot, color, t)
 
-	drawHUD(buf, cols, rows, hudH, opts, elapsed)
+	drawHUD(buf, cols, rows, hudH, phase, color, elapsed)
 	return buf
 }
 
-func drawRocket(buf [][]cell, ox, oy int, color bool, t float64) {
+func drawRocket(buf [][]cell, ox, oy int, color bool) {
 	edge := cRGB(color, 185, 195, 220)
 	glass := cRGB(color, 90, 200, 230)
 	lamp := cRGB(color, 255, 200, 110)
@@ -241,7 +261,6 @@ func drawRocket(buf [][]cell, ox, oy int, color bool, t float64) {
 	if rows > 0 {
 		cols = len(buf[0])
 	}
-	_ = t
 	for i, line := range rocketArt {
 		y := oy + i
 		if y < 0 || y >= rows {
@@ -271,12 +290,11 @@ func drawRocket(buf [][]cell, ox, oy int, color bool, t float64) {
 	}
 }
 
-func drawPlume(buf [][]cell, plumeX, engineY, cols, skyBot int, color bool, t float64, frame int) {
+func drawPlume(buf [][]cell, plumeX, engineY, cols, skyBot int, color bool, t float64) {
 	if engineY < 0 || engineY >= skyBot {
 		return
 	}
 	cx := plumeX
-	// Short single-column flame — gentle breathe, no crackle.
 	length := 2
 	if math.Sin(t*3) > 0.3 {
 		length = 3
@@ -292,19 +310,16 @@ func drawPlume(buf [][]cell, plumeX, engineY, cols, skyBot int, color bool, t fl
 			continue
 		}
 		ch := glyphs[min(i, len(glyphs)-1)]
-		// Soft heat falloff
 		heat := 1.0 - float64(i)/float64(length)
 		r := min(255, int(160+heat*80))
 		g := min(255, int(50+heat*90))
 		b := 30
-		_ = frame
 		buf[y][x] = cell{ch: ch, fg: cRGB(color, r, g, b)}
 	}
 }
 
-func drawHUD(buf [][]cell, cols, rows, hudH int, opts Options, elapsed time.Duration) {
+func drawHUD(buf [][]cell, cols, rows, hudH int, phase string, color bool, elapsed time.Duration) {
 	top := rows - hudH
-	color := opts.Color
 	barFG := cRGB(color, 230, 175, 90)
 	dimFG := cRGB(color, 70, 75, 95)
 
@@ -318,7 +333,7 @@ func drawHUD(buf [][]cell, cols, rows, hudH int, opts Options, elapsed time.Dura
 		}
 	}
 
-	label := fmt.Sprintf("%s  ·  %s", opts.Phase, formatDur(elapsed))
+	label := fmt.Sprintf("%s  ·  %s", phase, formatDur(elapsed))
 	runes := []rune(label)
 	start := (cols - len(runes)) / 2
 	y := top

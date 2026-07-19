@@ -8,6 +8,7 @@ import (
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
 	"github.com/maxBRT/ship-cli/internal/prompt"
+	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
 
@@ -17,12 +18,13 @@ import (
 // failure Aborts (restore Ticket, undo commits, stop). Ports stay behind
 // interfaces so tests can fake them.
 type Orchestrator struct {
-	Tickets ticket.Port
-	Agent   agent.Port
-	PRs     PullRequests
-	Repo    gitops.Repo
-	Config  Config
-	Stdout  io.Writer
+	Tickets  ticket.Port
+	Agent    agent.Port
+	PRs      PullRequests
+	Repo     gitops.Repo
+	Config   Config
+	Throbber throbber.Port // optional; nil means no wait UI
+	Stdout   io.Writer
 }
 
 // PullRequests is the side-effect seam Final success is checked against: an
@@ -95,7 +97,7 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 
 	implInput := prompt.ImplementInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, prompt.Implement(implInput)); err != nil {
+	if err := r.runPhase(ctx, "Implement", prompt.Implement(implInput)); err != nil {
 		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -108,7 +110,7 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 
 	reviewInput := prompt.ReviewInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, prompt.Review(reviewInput)); err != nil {
+	if err := r.runPhase(ctx, "Review", prompt.Review(reviewInput)); err != nil {
 		return r.abort(ctx, t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -153,7 +155,7 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 		PartialProgress: partial,
 		MaxIterations:   r.Config.MaxIterations,
 	})
-	if err := r.runPhase(ctx, finalPrompt); err != nil {
+	if err := r.runPhase(ctx, "Final", finalPrompt); err != nil {
 		return fmt.Errorf("Abort: Final Phase: %w", err)
 	}
 	open, err := r.PRs.HasOpenPR(ctx, branch)
@@ -166,13 +168,19 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 	return nil
 }
 
-func (r Orchestrator) runPhase(ctx context.Context, promptText string) error {
-	return r.Agent.RunPhase(ctx, agent.PhaseRequest{
-		Prompt:    promptText,
-		Workspace: r.Repo.Dir,
-		Model:     r.Config.Model,
-		Timeout:   r.Config.Timeout,
-	})
+func (r Orchestrator) runPhase(ctx context.Context, phase, promptText string) error {
+	work := func(ctx context.Context) error {
+		return r.Agent.RunPhase(ctx, agent.PhaseRequest{
+			Prompt:    promptText,
+			Workspace: r.Repo.Dir,
+			Model:     r.Config.Model,
+			Timeout:   r.Config.Timeout,
+		})
+	}
+	if r.Throbber == nil {
+		return work(ctx)
+	}
+	return r.Throbber.During(ctx, phase, work)
 }
 
 func (r Orchestrator) stdout() io.Writer {
