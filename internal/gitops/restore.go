@@ -29,6 +29,19 @@ func (r Repo) UndoToRestorePoint(rp RestorePoint) error {
 	return r.git("reset", "--hard", string(rp))
 }
 
+// HasCommitsSince reports whether the current branch has new commits since rp.
+// Ship uses this to verify the Implement Phase actually committed work.
+func (r Repo) HasCommitsSince(rp RestorePoint) (bool, error) {
+	if rp == "" {
+		return false, fmt.Errorf("empty restore point")
+	}
+	head, err := r.gitOutput("rev-parse", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	return head != string(rp), nil
+}
+
 func (r Repo) gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.Dir

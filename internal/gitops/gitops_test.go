@@ -98,6 +98,37 @@ func TestUndoToRestorePoint_dropsTicketCommits(t *testing.T) {
 	}
 }
 
+func TestHasCommitsSince_detectsTicketCommits(t *testing.T) {
+	dir := initTempRepo(t)
+	repo := gitops.Repo{Dir: dir}
+	if _, err := repo.EnsureBranch("ship/run"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	rp, err := repo.RecordRestorePoint()
+	if err != nil {
+		t.Fatalf("RecordRestorePoint: %v", err)
+	}
+
+	has, err := repo.HasCommitsSince(rp)
+	if err != nil {
+		t.Fatalf("HasCommitsSince: %v", err)
+	}
+	if has {
+		t.Fatal("HasCommitsSince = true before any commit, want false")
+	}
+
+	writeAndCommit(t, dir, "work.txt", "ticket work\n", "ticket commit")
+
+	has, err = repo.HasCommitsSince(rp)
+	if err != nil {
+		t.Fatalf("HasCommitsSince: %v", err)
+	}
+	if !has {
+		t.Fatal("HasCommitsSince = false after commit, want true")
+	}
+}
+
 func initTempRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
