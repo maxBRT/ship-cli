@@ -10,6 +10,7 @@ import (
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/observe"
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
@@ -58,6 +59,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
 		Throbber: throbber.Line{Out: stderr, Color: true},
+		Observer: observe.New(dir, stderr),
 		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unicode"
+
+	"github.com/maxBRT/ship-cli/internal/observe"
 )
 
 // Cursor is an Agent Port that runs Cursor's headless agent CLI as a subprocess.
@@ -63,20 +66,32 @@ func (c Cursor) RunPhase(ctx context.Context, req PhaseRequest) error {
 		return fmt.Errorf("phase: %s", msg)
 	}
 
-	if err := requireStreamJSONSuccess(stdout.Bytes()); err != nil {
+	if err := consumeStreamJSON(stdout.Bytes(), req.Events); err != nil {
 		return err
 	}
 	return nil
 }
 
 type streamEvent struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
+	Type       string          `json:"type"`
+	Subtype    string          `json:"subtype"`
+	CallID     string          `json:"call_id"`
+	DurationMS int64           `json:"duration_ms"`
+	ToolCall   json.RawMessage `json:"tool_call"`
+	Usage      *streamUsage    `json:"usage"`
 }
 
-func requireStreamJSONSuccess(stdout []byte) error {
+type streamUsage struct {
+	InputTokens      int64 `json:"inputTokens"`
+	OutputTokens     int64 `json:"outputTokens"`
+	CacheReadTokens  int64 `json:"cacheReadTokens"`
+	CacheWriteTokens int64 `json:"cacheWriteTokens"`
+}
+
+func consumeStreamJSON(stdout []byte, sink observe.Sink) error {
 	lines := bytes.Split(stdout, []byte("\n"))
 	var last *streamEvent
+	toolCount := 0
 	for _, line := range lines {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -86,7 +101,21 @@ func requireStreamJSONSuccess(stdout []byte) error {
 		if err := json.Unmarshal(line, &ev); err != nil {
 			continue
 		}
-		if ev.Type == "result" {
+		switch ev.Type {
+		case "tool_call":
+			if ev.Subtype == "completed" {
+				toolCount++
+				if sink != nil {
+					name, status := parseToolCall(ev.ToolCall)
+					sink.Emit(observe.Event{
+						Kind:       observe.KindTool,
+						Name:       name,
+						DurationMS: ev.DurationMS,
+						Status:     status,
+					})
+				}
+			}
+		case "result":
 			last = &ev
 		}
 	}
@@ -96,5 +125,76 @@ func requireStreamJSONSuccess(stdout []byte) error {
 	if last.Subtype != "success" {
 		return fmt.Errorf("phase: result subtype %q, want success", last.Subtype)
 	}
+	if sink != nil {
+		end := observe.Event{
+			Kind:       observe.KindPhaseEnd,
+			Outcome:    observe.OutcomeSuccess,
+			DurationMS: last.DurationMS,
+			ToolCount:  toolCount,
+		}
+		if last.Usage != nil {
+			end.Tokens = &observe.TokenCounts{
+				Input:      last.Usage.InputTokens,
+				Output:     last.Usage.OutputTokens,
+				CacheRead:  last.Usage.CacheReadTokens,
+				CacheWrite: last.Usage.CacheWriteTokens,
+			}
+		}
+		sink.Emit(end)
+	}
 	return nil
+}
+
+func parseToolCall(raw json.RawMessage) (name, status string) {
+	status = observe.ToolOK
+	if len(raw) == 0 {
+		return "unknown", status
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "unknown", status
+	}
+	for key, val := range obj {
+		name = toolCallKeyName(key, val)
+		status = toolCallStatus(val)
+		return name, status
+	}
+	return "unknown", status
+}
+
+func toolCallKeyName(key string, val json.RawMessage) string {
+	if key == "function" {
+		var fn struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(val, &fn) == nil && fn.Name != "" {
+			return fn.Name
+		}
+	}
+	if strings.HasSuffix(key, "ToolCall") {
+		base := strings.TrimSuffix(key, "ToolCall")
+		if base == "" {
+			return key
+		}
+		r := []rune(base)
+		r[0] = unicode.ToUpper(r[0])
+		return string(r)
+	}
+	return key
+}
+
+func toolCallStatus(val json.RawMessage) string {
+	var body struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(val, &body) != nil || body.Result == nil {
+		return observe.ToolOK
+	}
+	if _, ok := body.Result["error"]; ok {
+		return observe.ToolError
+	}
+	if _, ok := body.Result["success"]; ok {
+		return observe.ToolOK
+	}
+	return observe.ToolOK
 }

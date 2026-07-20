@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"time"
+
+	"github.com/maxBRT/ship-cli/internal/observe"
 )
 
 // Port is the Agent surface the Run orchestrator calls for a Phase.
@@ -19,4 +21,7 @@ type PhaseRequest struct {
 	Workspace string
 	Model     string // optional; empty omits --model
 	Timeout   time.Duration
+	// Events receives curated observability events while the Phase runs.
+	// Nil means the adapter emits nothing (path-agnostic; Ship owns the sink).
+	Events observe.Sink
 }

@@ -15,10 +15,91 @@ import (
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/observe"
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
+
+func TestRun_afterPhase_dumpsHighSignalToolAndTokenLines(t *testing.T) {
+	// Fake Agent emits curated events into the Observer sink. After each Phase
+	// the Orchestrator dumps one-liners; mid-Phase Emit must not write yet,
+	// and the throbber still wraps the Phase wait.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 1, Title: "one"}}}
+	prs := &fakePRs{}
+	th := &recordingThrobber{}
+	var dump strings.Builder
+	obs := observe.New(dir, &dump)
+	var midPhaseGrowth []int
+
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if req.Events == nil {
+			t.Fatal("PhaseRequest.Events = nil, want Observer sink")
+		}
+		before := dump.Len()
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Read",
+			DurationMS: 42,
+			Status:     observe.ToolOK,
+		})
+		req.Events.Emit(observe.Event{
+			Kind:    observe.KindPhaseEnd,
+			Outcome: observe.OutcomeSuccess,
+			Tokens: &observe.TokenCounts{
+				Input:      120,
+				Output:     45,
+				CacheRead:  10,
+				CacheWrite: 2,
+			},
+		})
+		midPhaseGrowth = append(midPhaseGrowth, dump.Len()-before)
+
+		if isFinalPrompt(req.Prompt) {
+			prs.openPR("ship/run")
+			return nil
+		}
+		if idx%2 == 1 {
+			writeAndCommit(t, req.Workspace, fmt.Sprintf("impl-%d.txt", idx), "work\n", "implement work")
+		}
+		return nil
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		PRs:      prs,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Throbber: th,
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if want := []string{"Implement", "Review", "Final"}; !slices.Equal(th.phases, want) {
+		t.Errorf("throbber phases = %v, want %v", th.phases, want)
+	}
+	for i, growth := range midPhaseGrowth {
+		if growth != 0 {
+			t.Errorf("phase %d dump grew by %d mid-Phase, want 0 (throbber-only)", i+1, growth)
+		}
+	}
+
+	got := dump.String()
+	// Three Phases each dump the same worked-example lines.
+	wantTool := "tool  Read  42ms  ok"
+	wantTokens := "tokens  input=120 output=45 cache_read=10 cache_write=2"
+	if c := strings.Count(got, wantTool); c != 3 {
+		t.Errorf("tool dump lines = %d, want 3; got:\n%s", c, got)
+	}
+	if c := strings.Count(got, wantTokens); c != 3 {
+		t.Errorf("token dump lines = %d, want 3; got:\n%s", c, got)
+	}
+}
 
 func TestRun_wrapsEachPhaseInThrobberDuring(t *testing.T) {
 	dir := initTempRepo(t)
@@ -708,6 +789,209 @@ func TestRun_reviewMayBeCommitless(t *testing.T) {
 	}
 	if got := tickets.doneList; !equalInts(got, []int{7}) {
 		t.Errorf("done = %v, want [7]; commitless Review must still finish", got)
+	}
+}
+
+func TestRun_phaseFailure_printsAbortBannerWithReportPaths(t *testing.T) {
+	// On Abort, stderr gets a banner with the Run report directory and the
+	// Phase log path so operators know where to look after failure.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	var stderr strings.Builder
+	obs := observe.New(dir, &stderr)
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want Abort error when a Phase fails")
+	}
+
+	runsRoot := filepath.Join(dir, ".ship", "runs")
+	entries, errDir := os.ReadDir(runsRoot)
+	if errDir != nil {
+		t.Fatalf("Run report dir: %v", errDir)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("Run report dirs under %s = %d, want 1", runsRoot, len(entries))
+	}
+	runDir := filepath.Join(runsRoot, entries[0].Name())
+	logs, errGlob := filepath.Glob(filepath.Join(runDir, "*.jsonl"))
+	if errGlob != nil {
+		t.Fatalf("Phase logs: %v", errGlob)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("Phase logs in %s = %v, want 1", runDir, logs)
+	}
+
+	got := stderr.String()
+	for _, want := range []string{"Abort", "Run", "Phase", runDir, logs[0]} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Abort banner missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+func TestRun_phaseFailure_abortBannerIncludesLastToolLines(t *testing.T) {
+	// When the failing Agent recorded tools, the Abort banner includes those
+	// name/duration/status one-liners so operators see recent tool activity.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	var stderr strings.Builder
+	obs := observe.New(dir, &stderr)
+	ag := &fakeAgent{handler: func(_ int, req agent.PhaseRequest) error {
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Read",
+			DurationMS: 42,
+			Status:     observe.ToolOK,
+		})
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Write",
+			DurationMS: 7,
+			Status:     observe.ToolError,
+		})
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("Run: want Abort error when a Phase fails")
+	}
+
+	got := stderr.String()
+	for _, want := range []string{
+		"tool  Read  42ms  ok",
+		"tool  Write  7ms  error",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Abort banner missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+func TestRun_phaseFailure_abortBannerWithoutSuccessDump(t *testing.T) {
+	// Abort banner must not rely on the phase-end success dump: on failure,
+	// paths and last tools still appear, and EndPhase token lines do not.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	var stderr strings.Builder
+	obs := observe.New(dir, &stderr)
+	ag := &fakeAgent{handler: func(_ int, req agent.PhaseRequest) error {
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Shell",
+			DurationMS: 3,
+			Status:     observe.ToolOK,
+		})
+		req.Events.Emit(observe.Event{
+			Kind:    observe.KindPhaseEnd,
+			Outcome: observe.OutcomeError,
+			Tokens: &observe.TokenCounts{
+				Input:  99,
+				Output: 1,
+			},
+		})
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("Run: want Abort error when a Phase fails")
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "Abort") {
+		t.Errorf("banner missing Abort; got:\n%s", got)
+	}
+	if !strings.Contains(got, "tool  Shell  3ms  ok") {
+		t.Errorf("banner missing last tool line; got:\n%s", got)
+	}
+	if strings.Contains(got, "tokens") {
+		t.Errorf("banner ran success dump (tokens line); got:\n%s", got)
+	}
+	runsRoot := filepath.Join(dir, ".ship", "runs")
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("Run report dir: entries=%v err=%v", entries, err)
+	}
+	runDir := filepath.Join(runsRoot, entries[0].Name())
+	if !strings.Contains(got, runDir) {
+		t.Errorf("banner missing Run report path %q; got:\n%s", runDir, got)
+	}
+}
+
+func TestRun_phaseFailure_phaseLogKeepsFlushedToolEvents(t *testing.T) {
+	// Disk logs flush as events arrive so Abort still leaves tool evidence
+	// on disk even though the success dump did not run.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	var stderr strings.Builder
+	obs := observe.New(dir, &stderr)
+	ag := &fakeAgent{handler: func(_ int, req agent.PhaseRequest) error {
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Read",
+			DurationMS: 42,
+			Status:     observe.ToolOK,
+		})
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("Run: want Abort error when a Phase fails")
+	}
+
+	runsRoot := filepath.Join(dir, ".ship", "runs")
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("Run report dir: entries=%v err=%v", entries, err)
+	}
+	logs, err := filepath.Glob(filepath.Join(runsRoot, entries[0].Name(), "*.jsonl"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("Phase logs = %v, err=%v, want 1", logs, err)
+	}
+	body, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	for _, want := range []string{`"kind":"tool"`, `"name":"Read"`, `"duration_ms":42`, `"status":"ok"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Phase log missing %s; got:\n%s", want, got)
+		}
 	}
 }
 
