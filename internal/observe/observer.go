@@ -66,11 +66,11 @@ func (o *Observer) BeginPhase(phase string) Sink {
 		if o.runDir == "" {
 			id := time.Now().Format("20060102-150405.000000000")
 			o.runDir = filepath.Join(o.Dir, ".ship", "runs", id)
-			_ = os.MkdirAll(o.runDir, 0o755)
+			_ = os.MkdirAll(o.runDir, 0o750)
 		}
 		name := fmt.Sprintf("%03d-%s.jsonl", o.phaseSeq, strings.ToLower(phase))
 		o.phaseLog = filepath.Join(o.runDir, name)
-		f, err := os.Create(o.phaseLog)
+		f, err := os.OpenFile(o.phaseLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err == nil {
 			_ = f.Close()
 		}
@@ -87,7 +87,7 @@ func (o *Observer) Emit(e Event) {
 	if o.phaseLog == "" {
 		return
 	}
-	f, err := os.OpenFile(o.phaseLog, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(o.phaseLog, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

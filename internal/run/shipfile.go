@@ -36,10 +36,10 @@ model: %q
 max_iterations: %d
 timeout: %s
 `, cfg.Branch, cfg.Feature, cfg.Agent, cfg.Model, cfg.MaxIterations, formatDuration(cfg.Timeout))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return false, err
 		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			return false, err
 		}
 		return true, nil
