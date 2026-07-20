@@ -1,9 +1,14 @@
 package observe
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Port is the Run-owned observability surface: it receives curated events
@@ -16,23 +21,35 @@ type Port interface {
 	// EndPhase dumps high-signal one-liners for tools and token totals
 	// collected since BeginPhase, then clears the buffer.
 	EndPhase()
+	// Abort prints a stderr banner with the Run report directory, Phase log
+	// path, and last tool lines, then clears the buffer. Used on Phase
+	// failure instead of EndPhase so the banner does not rely on the
+	// success dump.
+	Abort()
 }
 
 // Observer buffers curated events for a Phase and dumps one-liners to Out
 // when EndPhase is called. Safe for concurrent Emit from an Agent adapter.
+// Dir is the workspace root; Phase reports land under Dir/.ship/runs/<run-id>/.
 type Observer struct {
+	Dir string
 	Out io.Writer
 
-	mu     sync.Mutex
-	events []Event
+	mu       sync.Mutex
+	events   []Event
+	runDir   string
+	phaseLog string
+	phaseSeq int
 }
 
-// New returns an Observer that dumps to out. A nil out discards dump output.
-func New(out io.Writer) *Observer {
+// New returns an Observer that dumps to out and writes Phase reports under
+// dir/.ship/runs. A nil out discards dump output. An empty dir skips durable
+// report paths (terminal dump still works).
+func New(dir string, out io.Writer) *Observer {
 	if out == nil {
 		out = io.Discard
 	}
-	return &Observer{Out: out}
+	return &Observer{Dir: dir, Out: out}
 }
 
 var _ Port = (*Observer)(nil)
@@ -40,18 +57,43 @@ var _ Sink = (*Observer)(nil)
 
 // BeginPhase clears any prior Phase buffer and returns this Observer as the
 // Phase Sink so adapters stay path-agnostic.
-func (o *Observer) BeginPhase(string) Sink {
+func (o *Observer) BeginPhase(phase string) Sink {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.events = nil
+	o.phaseSeq++
+	if o.Dir != "" {
+		if o.runDir == "" {
+			id := time.Now().Format("20060102-150405.000000000")
+			o.runDir = filepath.Join(o.Dir, ".ship", "runs", id)
+			_ = os.MkdirAll(o.runDir, 0o755)
+		}
+		name := fmt.Sprintf("%03d-%s.jsonl", o.phaseSeq, strings.ToLower(phase))
+		o.phaseLog = filepath.Join(o.runDir, name)
+		f, err := os.Create(o.phaseLog)
+		if err == nil {
+			_ = f.Close()
+		}
+	}
 	return o
 }
 
-// Emit records a curated event for the current Phase. It does not write to Out.
+// Emit records a curated event for the current Phase and appends it to the
+// Phase log when durable reports are enabled. It does not write to Out.
 func (o *Observer) Emit(e Event) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.events = append(o.events, e)
+	if o.phaseLog == "" {
+		return
+	}
+	f, err := os.OpenFile(o.phaseLog, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	_ = enc.Encode(e)
 }
 
 // EndPhase writes high-signal one-liners for buffered tools (and later tokens)
@@ -75,3 +117,39 @@ func (o *Observer) EndPhase() {
 		}
 	}
 }
+
+// Abort writes a banner with Run report and Phase log paths plus the last
+// handful of tool one-liners, then clears the buffer without running the
+// success dump.
+func (o *Observer) Abort() {
+	o.mu.Lock()
+	runDir := o.runDir
+	phaseLog := o.phaseLog
+	events := o.events
+	o.events = nil
+	o.mu.Unlock()
+
+	fmt.Fprintf(o.Out, "Abort: Phase failed\n")
+	if runDir != "" {
+		fmt.Fprintf(o.Out, "Run report: %s\n", runDir)
+	}
+	if phaseLog != "" {
+		fmt.Fprintf(o.Out, "Phase log: %s\n", phaseLog)
+	}
+
+	var tools []Event
+	for _, e := range events {
+		if e.Kind == KindTool {
+			tools = append(tools, e)
+		}
+	}
+	if n := len(tools); n > abortToolLimit {
+		tools = tools[n-abortToolLimit:]
+	}
+	for _, e := range tools {
+		fmt.Fprintf(o.Out, "tool  %s  %dms  %s\n", e.Name, e.DurationMS, e.Status)
+	}
+}
+
+// abortToolLimit is how many trailing tool lines the Abort banner keeps.
+const abortToolLimit = 5

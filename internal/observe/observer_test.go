@@ -11,7 +11,7 @@ func TestObserver_EndPhase_dumpsToolOneLiners(t *testing.T) {
 	// Worked example: same curated tool fields as Phase logs (name,
 	// duration_ms, status); terminal presentation is one line each.
 	var out strings.Builder
-	obs := observe.New(&out)
+	obs := observe.New(t.TempDir(), &out)
 
 	sink := obs.BeginPhase("Implement")
 	sink.Emit(observe.Event{
@@ -43,7 +43,7 @@ func TestObserver_EndPhase_dumpsToolOneLiners(t *testing.T) {
 func TestObserver_EndPhase_dumpsPhaseTokenTotals(t *testing.T) {
 	// Same curated token fields as phase_end in Phase logs; one terminal line.
 	var out strings.Builder
-	obs := observe.New(&out)
+	obs := observe.New(t.TempDir(), &out)
 
 	sink := obs.BeginPhase("Review")
 	sink.Emit(observe.Event{
@@ -78,7 +78,7 @@ func TestObserver_Emit_doesNotWriteUntilEndPhase(t *testing.T) {
 	// Throbber stays the only live UI during the Phase: buffered Emit must
 	// not interleave tool lines before EndPhase.
 	var out strings.Builder
-	obs := observe.New(&out)
+	obs := observe.New(t.TempDir(), &out)
 
 	sink := obs.BeginPhase("Implement")
 	sink.Emit(observe.Event{
@@ -99,7 +99,7 @@ func TestObserver_Emit_doesNotWriteUntilEndPhase(t *testing.T) {
 
 func TestObserver_EndPhase_omitsTokensLineWhenUsageAbsent(t *testing.T) {
 	var out strings.Builder
-	obs := observe.New(&out)
+	obs := observe.New(t.TempDir(), &out)
 
 	sink := obs.BeginPhase("Final")
 	sink.Emit(observe.Event{
@@ -121,5 +121,38 @@ func TestObserver_EndPhase_omitsTokensLineWhenUsageAbsent(t *testing.T) {
 	}
 	if strings.Contains(got, "tokens") {
 		t.Errorf("dump = %q, want no tokens line when usage absent", got)
+	}
+}
+
+func TestObserver_Abort_keepsLastHandfulOfToolLines(t *testing.T) {
+	// Abort banner keeps only the trailing handful of tool lines.
+	var out strings.Builder
+	obs := observe.New(t.TempDir(), &out)
+	sink := obs.BeginPhase("Implement")
+	names := []string{"A", "B", "C", "D", "E", "F"}
+	for i, name := range names {
+		sink.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       name,
+			DurationMS: int64(i + 1),
+			Status:     observe.ToolOK,
+		})
+	}
+	obs.Abort()
+
+	got := out.String()
+	if strings.Contains(got, "tool  A  1ms  ok") {
+		t.Errorf("Abort kept tool A beyond handful; got:\n%s", got)
+	}
+	for _, want := range []string{
+		"tool  B  2ms  ok",
+		"tool  C  3ms  ok",
+		"tool  D  4ms  ok",
+		"tool  E  5ms  ok",
+		"tool  F  6ms  ok",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Abort banner missing %q; got:\n%s", want, got)
+		}
 	}
 }

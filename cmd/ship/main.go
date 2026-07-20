@@ -59,7 +59,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
 		Throbber: throbber.Line{Out: stderr, Color: true},
-		Observer: observe.New(stderr),
+		Observer: observe.New(dir, stderr),
 		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {

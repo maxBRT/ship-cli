@@ -209,7 +209,11 @@ func (r Orchestrator) runPhase(ctx context.Context, status throbber.Status, prom
 		err = r.Throbber.During(ctx, status, work)
 	}
 	if r.Observer != nil {
-		r.Observer.EndPhase()
+		if err != nil {
+			r.Observer.Abort()
+		} else {
+			r.Observer.EndPhase()
+		}
 	}
 	return err
 }
