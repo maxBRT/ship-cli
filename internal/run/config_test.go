@@ -1,20 +1,40 @@
 package run_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/maxBRT/ship-cli/internal/run"
 )
 
-func TestParseConfig_defaults(t *testing.T) {
-	cfg, err := run.ParseConfig(nil, func(string) string { return "" })
+func writeShipYAML(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const fullYAML = `branch: ""
+feature: ""
+agent: agent
+model: ""
+max_iterations: 10
+timeout: 10m
+`
+
+func TestParseConfig_yamlDefaults(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, fullYAML)
+
+	cfg, err := run.ParseConfig(nil, dir)
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
 	}
 
 	if cfg.Branch != "" {
-		t.Errorf("Branch = %q, want empty (generate ship/<id>)", cfg.Branch)
+		t.Errorf("Branch = %q, want empty", cfg.Branch)
 	}
 	if cfg.Feature != "" {
 		t.Errorf("Feature = %q, want empty", cfg.Feature)
@@ -33,16 +53,17 @@ func TestParseConfig_defaults(t *testing.T) {
 	}
 }
 
-func TestParseConfig_envOverridesDefaults(t *testing.T) {
-	env := map[string]string{
-		"SHIP_BRANCH":         "feat/widget",
-		"SHIP_FEATURE":        "widget",
-		"SHIP_AGENT":          "cursor-agent",
-		"SHIP_MODEL":          "composer",
-		"SHIP_MAX_ITERATIONS": "3",
-		"SHIP_PHASE_TIMEOUT":  "5m",
-	}
-	cfg, err := run.ParseConfig(nil, func(k string) string { return env[k] })
+func TestParseConfig_yamlOverridesBuiltInDefaults(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, `branch: feat/widget
+feature: widget
+agent: cursor-agent
+model: composer
+max_iterations: 3
+timeout: 5m
+`)
+
+	cfg, err := run.ParseConfig(nil, dir)
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
 	}
@@ -67,15 +88,15 @@ func TestParseConfig_envOverridesDefaults(t *testing.T) {
 	}
 }
 
-func TestParseConfig_flagsOverrideEnv(t *testing.T) {
-	env := map[string]string{
-		"SHIP_BRANCH":         "from-env",
-		"SHIP_FEATURE":        "env-feature",
-		"SHIP_AGENT":          "env-agent",
-		"SHIP_MODEL":          "env-model",
-		"SHIP_MAX_ITERATIONS": "7",
-		"SHIP_PHASE_TIMEOUT":  "2m",
-	}
+func TestParseConfig_flagsOverrideYAML(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, `branch: from-yaml
+feature: yaml-feature
+agent: yaml-agent
+model: yaml-model
+max_iterations: 7
+timeout: 2m
+`)
 	args := []string{
 		"--branch", "from-flag",
 		"--feature", "flag-feature",
@@ -84,7 +105,7 @@ func TestParseConfig_flagsOverrideEnv(t *testing.T) {
 		"--max-iterations", "4",
 		"--timeout", "30s",
 	}
-	cfg, err := run.ParseConfig(args, func(k string) string { return env[k] })
+	cfg, err := run.ParseConfig(args, dir)
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
 	}
@@ -109,31 +130,19 @@ func TestParseConfig_flagsOverrideEnv(t *testing.T) {
 	}
 }
 
-func TestParseConfig_invalidMaxIterationsEnv(t *testing.T) {
-	env := map[string]string{"SHIP_MAX_ITERATIONS": "nope"}
-	_, err := run.ParseConfig(nil, func(k string) string { return env[k] })
-	if err == nil {
-		t.Fatal("ParseConfig: want error for invalid SHIP_MAX_ITERATIONS")
-	}
-}
-
-func TestParseConfig_invalidTimeoutEnv(t *testing.T) {
-	env := map[string]string{"SHIP_PHASE_TIMEOUT": "not-a-duration"}
-	_, err := run.ParseConfig(nil, func(k string) string { return env[k] })
-	if err == nil {
-		t.Fatal("ParseConfig: want error for invalid SHIP_PHASE_TIMEOUT")
-	}
-}
-
 func TestParseConfig_invalidMaxIterationsFlag(t *testing.T) {
-	_, err := run.ParseConfig([]string{"--max-iterations", "xyz"}, func(string) string { return "" })
+	dir := t.TempDir()
+	writeShipYAML(t, dir, fullYAML)
+	_, err := run.ParseConfig([]string{"--max-iterations", "xyz"}, dir)
 	if err == nil {
 		t.Fatal("ParseConfig: want error for invalid --max-iterations")
 	}
 }
 
 func TestParseConfig_invalidTimeoutFlag(t *testing.T) {
-	_, err := run.ParseConfig([]string{"--timeout", "zzz"}, func(string) string { return "" })
+	dir := t.TempDir()
+	writeShipYAML(t, dir, fullYAML)
+	_, err := run.ParseConfig([]string{"--timeout", "zzz"}, dir)
 	if err == nil {
 		t.Fatal("ParseConfig: want error for invalid --timeout")
 	}
