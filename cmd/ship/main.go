@@ -40,7 +40,7 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
-		Throbber: throbber.Tableau{Out: stderr, Color: color},
+		Throbber: throbber.Line{Out: stderr, Color: color},
 		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {

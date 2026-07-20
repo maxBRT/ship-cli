@@ -15,6 +15,7 @@ import (
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
 	"github.com/maxBRT/ship-cli/internal/run"
+	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
 
@@ -625,8 +626,8 @@ type recordingThrobber struct {
 	workCalls int
 }
 
-func (r *recordingThrobber) During(ctx context.Context, phase string, work func(context.Context) error) error {
-	r.phases = append(r.phases, phase)
+func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, work func(context.Context) error) error {
+	r.phases = append(r.phases, status.Phase)
 	r.workCalls++
 	return work(ctx)
 }
