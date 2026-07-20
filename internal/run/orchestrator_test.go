@@ -321,11 +321,11 @@ func TestRun_pickerConfirmedOrderIsRunOrder(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{9, 8}) {
 		t.Errorf("done = %v, want [9 8] (picker order)", got)
 	}
-	if !strings.Contains(out.String(), "Iteration 1: Ticket #9") {
-		t.Errorf("stdout = %q, want first Iteration on #9", out.String())
+	if !strings.Contains(out.String(), "Ticket #9 Done") {
+		t.Errorf("stdout = %q, want Ticket #9 Done", out.String())
 	}
-	if !strings.Contains(out.String(), "Iteration 2: Ticket #8") {
-		t.Errorf("stdout = %q, want second Iteration on #8", out.String())
+	if !strings.Contains(out.String(), "Ticket #8 Done") {
+		t.Errorf("stdout = %q, want Ticket #8 Done", out.String())
 	}
 	if strings.Contains(out.String(), "Ticket #7") {
 		t.Errorf("stdout = %q, dropped Ticket #7 must not run", out.String())

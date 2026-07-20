@@ -47,7 +47,7 @@ func TestInitConfig_writesFilledDefaults(t *testing.T) {
 		"agent: agent",
 		"model:",
 		"max_iterations: 10",
-		"timeout: 10m",
+		"timeout: 20m",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf(".ship/config.yaml missing %q; got:\n%s", want, got)
@@ -162,7 +162,7 @@ func TestInitConfig_roundTripLoadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig after Init: %v", err)
 	}
-	if cfg.Agent != "agent" || cfg.MaxIterations != 10 || cfg.Timeout != 10*time.Minute {
+	if cfg.Agent != "agent" || cfg.MaxIterations != 10 || cfg.Timeout != 20*time.Minute {
 		t.Errorf("unexpected defaults after init: %+v", cfg)
 	}
 }

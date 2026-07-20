@@ -25,7 +25,7 @@ feature: ""
 agent: agent
 model: ""
 max_iterations: 10
-timeout: 10m
+timeout: 20m
 `
 
 func TestParseConfig_yamlDefaults(t *testing.T) {
