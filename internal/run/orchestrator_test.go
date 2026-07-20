@@ -91,7 +91,7 @@ func TestRun_emptyPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
 	ag := &fakeAgent{}
-	queue := &fakeQueue{selectFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+	queue := &fakeQueue{confirmFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
 		return nil, nil // confirmed empty selection
 	}}
 	var out strings.Builder
@@ -126,7 +126,7 @@ func TestRun_canceledPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
 	ag := &fakeAgent{}
-	queue := &fakeQueue{selectFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+	queue := &fakeQueue{confirmFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
 		return nil, errors.New("picker canceled")
 	}}
 
@@ -294,7 +294,7 @@ func TestRun_pickerConfirmedOrderIsRunOrder(t *testing.T) {
 	prs := &fakePRs{}
 	ag := committingAgent(t, prs, "ship/run")
 	// Drop #7, reorder so #9 runs before #8.
-	queue := &fakeQueue{selectFn: func(candidates []ticket.Ticket) ([]ticket.Ticket, error) {
+	queue := &fakeQueue{confirmFn: func(candidates []ticket.Ticket) ([]ticket.Ticket, error) {
 		return []ticket.Ticket{candidates[2], candidates[1]}, nil
 	}}
 	var out strings.Builder
@@ -865,6 +865,66 @@ func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
 	}
 }
 
+func TestRun_nextRunAfterPartialProgressAlwaysOpensPicker(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven"},
+		{Number: 8, Title: "eight"},
+		{Number: 9, Title: "nine"},
+	}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	queue := &fakeQueue{}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 1},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if queue.calls != 1 {
+		t.Fatalf("picker Confirm calls after Partial Progress = %d, want 1", queue.calls)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7}) {
+		t.Errorf("done = %v, want [7] (one Iteration before Final)", got)
+	}
+	if len(tickets.ready) != 2 || !tickets.ready[0].OnShip || !tickets.ready[1].OnShip {
+		t.Errorf("leftover ready = %+v, want #8 and #9 still carrying ship", tickets.ready)
+	}
+
+	// Remaining ship Tickets stay Ready; the next Run must open the picker
+	// again (no auto-resume), still showing leftover ship membership.
+	prs2 := &fakePRs{}
+	ag2 := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if isFinalPrompt(req.Prompt) {
+			prs2.openPR("ship/run")
+			return nil
+		}
+		if idx%2 == 1 {
+			writeAndCommit(t, req.Workspace, fmt.Sprintf("partial-%d.txt", idx), "more\n", "continue after partial")
+		}
+		return nil
+	}}
+	r.Agent = ag2
+	r.PRs = prs2
+	r.Config.MaxIterations = 10
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if queue.calls != 2 {
+		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
+	}
+	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
+		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
+	}
+}
+
 // recordingThrobber records Phase labels and that work ran inside During.
 type recordingThrobber struct {
 	phases    []string
@@ -878,13 +938,13 @@ func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, 
 }
 
 // fakeQueue is the injectable picker/queue port for Orchestrator tests.
-// Without selectFn it confirms every candidate in order. With selectFn it
+// Without confirmFn it confirms every candidate in order. With confirmFn it
 // returns that selection (drop / reorder / empty / cancel) instead.
 type fakeQueue struct {
 	confirmed []int
 	calls     int
 	saw       [][]ticket.Ticket
-	selectFn  func(candidates []ticket.Ticket) ([]ticket.Ticket, error)
+	confirmFn func(candidates []ticket.Ticket) ([]ticket.Ticket, error)
 }
 
 func (f *fakeQueue) Confirm(_ context.Context, candidates []ticket.Ticket) ([]ticket.Ticket, error) {
@@ -895,8 +955,8 @@ func (f *fakeQueue) Confirm(_ context.Context, candidates []ticket.Ticket) ([]ti
 
 	var out []ticket.Ticket
 	var err error
-	if f.selectFn != nil {
-		out, err = f.selectFn(candidates)
+	if f.confirmFn != nil {
+		out, err = f.confirmFn(candidates)
 	} else {
 		out = make([]ticket.Ticket, len(candidates))
 		copy(out, candidates)
@@ -936,6 +996,11 @@ func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error
 func (f *fakeTickets) Stamp(_ context.Context, tickets []ticket.Ticket) error {
 	for _, t := range tickets {
 		f.stamped = append(f.stamped, t.Number)
+		for i := range f.ready {
+			if f.ready[i].Number == t.Number {
+				f.ready[i].OnShip = true
+			}
+		}
 	}
 	if f.afterStamp != nil {
 		f.afterStamp(f)
