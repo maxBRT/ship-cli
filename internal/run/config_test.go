@@ -28,8 +28,8 @@ func TestParseConfig_defaults(t *testing.T) {
 	if cfg.MaxIterations != 10 {
 		t.Errorf("MaxIterations = %d, want 10", cfg.MaxIterations)
 	}
-	if cfg.Timeout != 10*time.Minute {
-		t.Errorf("Timeout = %v, want 10m", cfg.Timeout)
+	if cfg.Timeout != 20*time.Minute {
+		t.Errorf("Timeout = %v, want 20m", cfg.Timeout)
 	}
 }
 
