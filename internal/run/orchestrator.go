@@ -12,13 +12,15 @@ import (
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
 
-// Orchestrator wires the Ship Run loop over its ports: it Claims Ready for
-// Agent Tickets, drives an Implement then a Review Phase per Iteration, marks
-// each Ticket Done, then runs Final and verifies an open pull request. Phase
-// failure Aborts (restore Ticket, undo commits, stop). Ports stay behind
-// interfaces so tests can fake them.
+// Orchestrator wires the Ship Run loop over its ports: it confirms a ship
+// queue from Ready for Agent candidates, stamps that set, drives an Implement
+// then a Review Phase per Iteration, marks each Ticket Done, then runs Final
+// and verifies an open pull request. Phase failure Aborts (undo commits,
+// stop) while leaving ship on unfinished Tickets. Ports stay behind interfaces
+// so tests can fake them.
 type Orchestrator struct {
 	Tickets  ticket.Port
+	Queue    Queue // optional; nil means AllCandidates
 	Agent    agent.Port
 	PRs      PullRequests
 	Repo     gitops.Repo
@@ -35,12 +37,16 @@ type PullRequests interface {
 
 // Run executes one Ship Run in the current checkout.
 //
-// It first ensures the Ready for Agent and In Progress tracker labels exist.
-// With no Ready for Agent Tickets it reports that and returns without touching
-// the branch. Otherwise it prepares the Run branch, then processes Tickets one
-// Iteration each (Implement Phase then Review Phase) up to the max-iterations
-// limit, stopping when the queue drains or the limit is hit, then runs Final.
-// A failed Phase, missing side effect, or timeout Aborts the Run.
+// It first ensures the Ready for Agent and ship tracker labels exist. With no
+// Ready for Agent Tickets it reports that and returns without touching the
+// branch. Otherwise it opens the queue picker (Interactive in production;
+// injectable in tests), stamps ship on the confirmed ordered set, prepares
+// the Run branch, then walks that frozen queue one Iteration each (Implement
+// Phase then Review Phase) up to the max-iterations limit, stopping when the
+// queue drains or the limit is hit, then runs Final. Mid-Run tracker changes
+// do not rewrite which Tickets are processed or in what order. A failed Phase,
+// missing side effect, or timeout Aborts the Run, leaving ship on unfinished
+// Tickets. Cancel or empty picker selection starts no Phases.
 func (r Orchestrator) Run(ctx context.Context) error {
 	if err := r.Tickets.EnsureLabels(ctx); err != nil {
 		return fmt.Errorf("ensure tracker labels: %w", err)
@@ -55,6 +61,19 @@ func (r Orchestrator) Run(ctx context.Context) error {
 		return nil
 	}
 
+	queue, err := r.queue().Confirm(ctx, ready)
+	if err != nil {
+		return fmt.Errorf("confirm ship queue: %w", err)
+	}
+	if len(queue) == 0 {
+		fmt.Fprintln(r.stdout(), "No Tickets selected; nothing to Run.")
+		return nil
+	}
+
+	if err := r.Tickets.Stamp(ctx, queue); err != nil {
+		return fmt.Errorf("stamp ship queue: %w", err)
+	}
+
 	branch, err := r.Repo.EnsureBranch(r.Config.Branch)
 	if err != nil {
 		return fmt.Errorf("prepare Run branch: %w", err)
@@ -63,8 +82,8 @@ func (r Orchestrator) Run(ctx context.Context) error {
 
 	var done []ticket.Ticket
 	iterations := 0
-	for iterations < r.Config.MaxIterations && len(ready) > 0 {
-		t := ready[0]
+	for iterations < r.Config.MaxIterations && iterations < len(queue) {
+		t := queue[iterations]
 		iterations++
 		fmt.Fprintf(r.stdout(), "Iteration %d: Ticket #%d %s\n", iterations, t.Number, t.Title)
 
@@ -72,52 +91,43 @@ func (r Orchestrator) Run(ctx context.Context) error {
 			return err
 		}
 		done = append(done, t)
-
-		ready, err = r.Tickets.ListReady(ctx, r.Config.Feature)
-		if err != nil {
-			return fmt.Errorf("list Ready for Agent Tickets: %w", err)
-		}
 	}
 
 	// Final only when at least one Iteration succeeded ("when there was work").
 	if len(done) == 0 {
 		return nil
 	}
-	partial := iterations >= r.Config.MaxIterations && len(ready) > 0
+	partial := iterations >= r.Config.MaxIterations && iterations < len(queue)
 	return r.final(ctx, branch, done, partial)
 }
 
-// iterate runs one Ticket through a single Iteration: Claim, the Implement
-// Phase (which must commit), the Review Phase (which may be commitless), then
-// Done. A failed Phase or missing side effect Aborts: restores the Ticket to
-// Ready for Agent, undoes that Ticket's commits, and stops the Run.
+// iterate runs one Ticket through a single Iteration: the Implement Phase
+// (which must commit), the Review Phase (which may be commitless), then Done.
+// A failed Phase or missing side effect Aborts: undoes that Ticket's commits
+// and stops the Run. Unfinished Tickets keep ship queue membership.
 func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string, iteration int) error {
-	if err := r.Tickets.Claim(ctx, t); err != nil {
-		return fmt.Errorf("claim Ticket #%d: %w", t.Number, err)
-	}
-
 	restore, err := r.Repo.RecordRestorePoint()
 	if err != nil {
-		return r.abort(ctx, t, gitops.RestorePoint(""), fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err))
+		return r.abort(t, gitops.RestorePoint(""), fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err))
 	}
 
 	ticketLabel := fmt.Sprintf("#%d %s", t.Number, t.Title)
 	implInput := prompt.ImplementInput{Ticket: ticketInput(t), Branch: branch}
 	if err := r.runPhase(ctx, throbber.Status{Phase: "Implement", Iteration: iteration, Ticket: ticketLabel}, prompt.Implement(implInput)); err != nil {
-		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
+		return r.abort(t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
 	}
 
 	committed, err := r.Repo.HasCommitsSince(restore)
 	if err != nil {
-		return r.abort(ctx, t, restore, fmt.Errorf("check Implement commits for Ticket #%d: %w", t.Number, err))
+		return r.abort(t, restore, fmt.Errorf("check Implement commits for Ticket #%d: %w", t.Number, err))
 	}
 	if !committed {
-		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d produced no commit(s)", t.Number))
+		return r.abort(t, restore, fmt.Errorf("Implement Phase for Ticket #%d produced no commit(s)", t.Number))
 	}
 
 	reviewInput := prompt.ReviewInput{Ticket: ticketInput(t), Branch: branch}
 	if err := r.runPhase(ctx, throbber.Status{Phase: "Review", Iteration: iteration, Ticket: ticketLabel}, prompt.Review(reviewInput)); err != nil {
-		return r.abort(ctx, t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
+		return r.abort(t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
 	}
 
 	if err := r.Tickets.Done(ctx, t); err != nil {
@@ -127,18 +137,23 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	return nil
 }
 
-// abort restores the Ticket to Ready for Agent, undoes that Ticket's commits
-// on the Run branch, and returns a clear Abort summary wrapping cause.
-func (r Orchestrator) abort(ctx context.Context, t ticket.Ticket, restore gitops.RestorePoint, cause error) error {
-	if err := r.Tickets.Abort(ctx, t); err != nil {
-		return fmt.Errorf("Abort: restore Ticket #%d failed after (%v): %w", t.Number, cause, err)
-	}
+// abort undoes that Ticket's commits on the Run branch and returns a clear
+// Abort summary wrapping cause. Tracker labels are left alone so unfinished
+// Tickets keep ship queue membership.
+func (r Orchestrator) abort(t ticket.Ticket, restore gitops.RestorePoint, cause error) error {
 	if restore != "" {
 		if err := r.Repo.UndoToRestorePoint(restore); err != nil {
 			return fmt.Errorf("Abort: undo commits for Ticket #%d failed after (%v): %w", t.Number, cause, err)
 		}
 	}
 	return fmt.Errorf("Abort: %w", cause)
+}
+
+func (r Orchestrator) queue() Queue {
+	if r.Queue != nil {
+		return r.Queue
+	}
+	return AllCandidates{}
 }
 
 // final runs the Final Phase: a fresh Agent invocation with the built-in Final

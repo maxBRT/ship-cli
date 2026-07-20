@@ -21,8 +21,9 @@ type Config struct {
 func WriteUsage(w io.Writer) {
 	fmt.Fprintf(w, `ship - run a sequential Ticket Run in the current checkout.
 
-A Run claims Ready for Agent Tickets, processes each through one Iteration
-(Implement Phase then Review Phase), then a Final Phase.
+A Run confirms a ship queue from Ready for Agent Tickets via an interactive
+picker, processes each through one Iteration (Implement Phase then Review
+Phase), then a Final Phase.
 
 Usage:
   ship [flags]

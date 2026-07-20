@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,15 +79,122 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 	if b := currentBranch(t, dir); b != "main" {
 		t.Errorf("branch = %q, want main (no branch prepared)", b)
 	}
-	if len(tickets.claimed) != 0 {
-		t.Errorf("claimed = %v, want none", tickets.claimed)
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none on empty queue", tickets.stamped)
 	}
 	if len(ag.reqs) != 0 {
 		t.Errorf("agent called %d times, want 0", len(ag.reqs))
 	}
 }
 
-func TestRun_ensureLabelsFailureStopsBeforeClaim(t *testing.T) {
+func TestRun_emptyPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
+	ag := &fakeAgent{}
+	queue := &fakeQueue{confirmFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+		return nil, nil // confirmed empty selection
+	}}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "No Tickets selected") {
+		t.Errorf("stdout = %q, want empty-selection message", out.String())
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none when picker confirms empty", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
+	}
+}
+
+func TestRun_canceledPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	ag := &fakeAgent{}
+	queue := &fakeQueue{confirmFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+		return nil, errors.New("picker canceled")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run error = nil, want picker cancel failure")
+	}
+	if !strings.Contains(err.Error(), "confirm ship queue") {
+		t.Errorf("Run error = %v, want confirm ship queue wrap", err)
+	}
+	if !strings.Contains(err.Error(), "picker canceled") {
+		t.Errorf("Run error = %v, want underlying cancel", err)
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none when picker is canceled", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
+	}
+}
+
+func TestRun_nonInteractivePickerFailsWithoutStamping(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	ag := &fakeAgent{}
+	queue := run.Interactive{
+		In:  strings.NewReader(""),
+		Out: io.Discard,
+		IsTerminal: func() bool {
+			return false
+		},
+	}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run error = nil, want non-interactive picker failure")
+	}
+	if !errors.Is(err, run.ErrNonInteractive) {
+		t.Errorf("Run error = %v, want ErrNonInteractive", err)
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none on non-interactive misuse", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+}
+
+func TestRun_ensureLabelsFailureStopsBeforeStamp(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{
 		ready:     []ticket.Ticket{{Number: 1, Title: "one"}},
@@ -109,8 +217,8 @@ func TestRun_ensureLabelsFailureStopsBeforeClaim(t *testing.T) {
 	if !strings.Contains(err.Error(), "ensure tracker labels") {
 		t.Fatalf("Run error = %v, want ensure tracker labels wrap", err)
 	}
-	if len(tickets.claimed) != 0 {
-		t.Errorf("claimed = %v, want none when EnsureLabels fails", tickets.claimed)
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none when EnsureLabels fails", tickets.stamped)
 	}
 	if len(ag.reqs) != 0 {
 		t.Errorf("agent called %d times, want 0", len(ag.reqs))
@@ -120,15 +228,17 @@ func TestRun_ensureLabelsFailureStopsBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
+func TestRun_stampsShipQueueMembershipBeforeIterations(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
 	prs := &fakePRs{}
 	ag := committingAgent(t, prs, "ship/run")
+	queue := &fakeQueue{} // confirms all candidates in order
 	var out strings.Builder
 
 	r := run.Orchestrator{
 		Tickets: tickets,
+		Queue:   queue,
 		Agent:   ag,
 		PRs:     prs,
 		Repo:    gitops.Repo{Dir: dir},
@@ -139,20 +249,25 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if b := currentBranch(t, dir); b != "ship/run" {
-		t.Errorf("branch = %q, want ship/run", b)
+	if !equalInts(queue.confirmed, []int{7, 8}) {
+		t.Errorf("queue confirmed = %v, want [7 8] (all candidates)", queue.confirmed)
 	}
-	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
-		t.Errorf("claimed = %v, want [7 8]", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (ship queue membership)", got)
 	}
 	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
 		t.Errorf("done = %v, want [7 8]", got)
+	}
+	if got := tickets.shipCleared; !equalInts(got, []int{7, 8}) {
+		t.Errorf("ship cleared = %v, want [7 8] (Done removes ship)", got)
+	}
+	if b := currentBranch(t, dir); b != "ship/run" {
+		t.Errorf("branch = %q, want ship/run", b)
 	}
 	// Two Phases (Implement, Review) per Ticket, then Final.
 	if len(ag.reqs) != 5 {
 		t.Fatalf("agent called %d times, want 5", len(ag.reqs))
 	}
-	// Each Phase gets the checkout as its workspace and the configured model.
 	for i, req := range ag.reqs {
 		if req.Workspace != dir {
 			t.Errorf("req %d workspace = %q, want %q", i, req.Workspace, dir)
@@ -161,12 +276,96 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 			t.Errorf("req %d model = %q, want composer", i, req.Model)
 		}
 	}
-	// Implement Phase for Ticket 7 references its number and the branch.
 	if !strings.Contains(ag.reqs[0].Prompt, "#7") || !strings.Contains(ag.reqs[0].Prompt, "ship/run") {
 		t.Errorf("first prompt missing Ticket/branch context:\n%s", ag.reqs[0].Prompt)
 	}
 	if !strings.Contains(out.String(), "Queue drained") {
 		t.Errorf("stdout = %q, want drain summary", out.String())
+	}
+}
+
+func TestRun_pickerConfirmedOrderIsRunOrder(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven"},
+		{Number: 8, Title: "eight"},
+		{Number: 9, Title: "nine"},
+	}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	// Drop #7, reorder so #9 runs before #8.
+	queue := &fakeQueue{confirmFn: func(candidates []ticket.Ticket) ([]ticket.Ticket, error) {
+		return []ticket.Ticket{candidates[2], candidates[1]}, nil
+	}}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !equalInts(queue.confirmed, []int{9, 8}) {
+		t.Errorf("queue confirmed = %v, want [9 8]", queue.confirmed)
+	}
+	if got := tickets.stamped; !equalInts(got, []int{9, 8}) {
+		t.Errorf("stamped = %v, want [9 8] (picker order)", got)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{9, 8}) {
+		t.Errorf("done = %v, want [9 8] (picker order)", got)
+	}
+	if !strings.Contains(out.String(), "Iteration 1: Ticket #9") {
+		t.Errorf("stdout = %q, want first Iteration on #9", out.String())
+	}
+	if !strings.Contains(out.String(), "Iteration 2: Ticket #8") {
+		t.Errorf("stdout = %q, want second Iteration on #8", out.String())
+	}
+	if strings.Contains(out.String(), "Ticket #7") {
+		t.Errorf("stdout = %q, dropped Ticket #7 must not run", out.String())
+	}
+}
+
+func TestRun_processesFrozenShipQueueDespiteMidRunReadyChanges(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{
+		ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}},
+		afterStamp: func(f *fakeTickets) {
+			// Mid-Run tracker rewrite after stamp: #99 jumps ahead and #8
+			// disappears from Ready. The frozen ship queue must still walk #7
+			// then #8.
+			f.ready = []ticket.Ticket{{Number: 99, Title: "intruder"}}
+		},
+	}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (frozen ship queue)", got)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
+		t.Errorf("done = %v, want [7 8] (frozen ship queue)", got)
+	}
+	if slices.Contains(tickets.stamped, 99) || slices.Contains(tickets.doneList, 99) {
+		t.Errorf("Run must ignore mid-Run Ready for Agent changes; stamped=%v done=%v", tickets.stamped, tickets.doneList)
 	}
 }
 
@@ -304,9 +503,6 @@ func TestRun_finalPhaseFailureAbortsRun(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{7}) {
 		t.Errorf("done = %v, want [7]", got)
 	}
-	if len(tickets.aborted) != 0 {
-		t.Errorf("aborted = %v, want none (Final has no In Progress Ticket)", tickets.aborted)
-	}
 	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
 	if open {
 		t.Error("no PR should be recorded when Final Agent fails")
@@ -335,8 +531,8 @@ func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
 		t.Errorf("done = %v, want [7 8] (stopped at max)", got)
 	}
-	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
-		t.Errorf("claimed = %v, want [7 8]; Ticket 9 must stay claimable", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8, 9}) {
+		t.Errorf("stamped = %v, want [7 8 9]; Ticket 9 keeps ship under Partial Progress", got)
 	}
 	if !strings.Contains(out.String(), "max iterations") {
 		t.Errorf("stdout = %q, want partial-progress message", out.String())
@@ -375,8 +571,8 @@ func TestRun_implementWithoutCommitFailsAndDoesNotMarkDone(t *testing.T) {
 	if !strings.Contains(err.Error(), "no commit") {
 		t.Errorf("error = %q, want mention of missing commit", err)
 	}
-	if got := tickets.claimed; !equalInts(got, []int{7}) {
-		t.Errorf("claimed = %v, want [7]", got)
+	if got := tickets.stamped; !equalInts(got, []int{7}) {
+		t.Errorf("stamped = %v, want [7]", got)
 	}
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none (Iteration failed)", tickets.doneList)
@@ -387,7 +583,7 @@ func TestRun_implementWithoutCommitFailsAndDoesNotMarkDone(t *testing.T) {
 	}
 }
 
-func TestRun_implementWithoutCommitAbortsTicket(t *testing.T) {
+func TestRun_implementWithoutCommitAbortsWithoutLabelRestore(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}}}
 	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error { return nil }}
@@ -403,18 +599,21 @@ func TestRun_implementWithoutCommitAbortsTicket(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run: want error when Implement commits nothing")
 	}
-	if got := tickets.aborted; !equalInts(got, []int{7}) {
-		t.Errorf("aborted = %v, want [7] (side-effect miss Aborts)", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (unfinished Tickets keep ship)", got)
 	}
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none", tickets.doneList)
 	}
-	if got := tickets.claimed; !equalInts(got, []int{7}) {
-		t.Errorf("claimed = %v, want [7] only (no further Tickets)", got)
+	if len(tickets.shipCleared) != 0 {
+		t.Errorf("ship cleared = %v, want none (Abort does not clear ship)", tickets.shipCleared)
+	}
+	if len(ag.reqs) != 1 {
+		t.Errorf("agent called %d times, want 1 (stopped after first Implement)", len(ag.reqs))
 	}
 }
 
-func TestRun_phaseTimeoutAbortsTicket(t *testing.T) {
+func TestRun_phaseTimeoutAbortsWithoutLabelRestore(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7}, {Number: 8}}}
 	timeout := 50 * time.Millisecond
@@ -439,14 +638,14 @@ func TestRun_phaseTimeoutAbortsTicket(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") {
 		t.Errorf("error = %q, want timeout/deadline", err)
 	}
-	if got := tickets.aborted; !equalInts(got, []int{7}) {
-		t.Errorf("aborted = %v, want [7] (timeout Aborts like other Phase failures)", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (unfinished Tickets keep ship)", got)
+	}
+	if len(tickets.shipCleared) != 0 {
+		t.Errorf("ship cleared = %v, want none (Abort does not clear ship)", tickets.shipCleared)
 	}
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none", tickets.doneList)
-	}
-	if got := tickets.claimed; !equalInts(got, []int{7}) {
-		t.Errorf("claimed = %v, want [7] only", got)
 	}
 }
 
@@ -542,7 +741,7 @@ func TestRun_phaseFailureStopsRun(t *testing.T) {
 	}
 }
 
-func TestRun_phaseFailureAbortsTicketToReadyForAgent(t *testing.T) {
+func TestRun_phaseFailureAbortsWithoutLabelRestore(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
 	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
@@ -560,18 +759,18 @@ func TestRun_phaseFailureAbortsTicketToReadyForAgent(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run: want error when a Phase fails")
 	}
-	if got := tickets.aborted; !equalInts(got, []int{7}) {
-		t.Errorf("aborted = %v, want [7] (restored to Ready for Agent)", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (unfinished Tickets keep ship)", got)
+	}
+	if len(tickets.shipCleared) != 0 {
+		t.Errorf("ship cleared = %v, want none (Abort does not clear ship)", tickets.shipCleared)
 	}
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none", tickets.doneList)
 	}
-	// Abort must stop the Run: no Review, no Ticket 8, no Final.
+	// Abort must stop the Run: no Review, no Ticket 8 Iteration, no Final.
 	if len(ag.reqs) != 1 {
 		t.Errorf("agent called %d times, want 1 (Implement only)", len(ag.reqs))
-	}
-	if got := tickets.claimed; !equalInts(got, []int{7}) {
-		t.Errorf("claimed = %v, want [7] only", got)
 	}
 }
 
@@ -602,9 +801,6 @@ func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
 	if !strings.Contains(err.Error(), "review boom") {
 		t.Errorf("error = %q, want underlying Review failure", err)
 	}
-	if got := tickets.aborted; !equalInts(got, []int{7}) {
-		t.Errorf("aborted = %v, want [7]", got)
-	}
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none", tickets.doneList)
 	}
@@ -615,8 +811,117 @@ func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
 	if len(ag.reqs) != 2 {
 		t.Errorf("agent called %d times, want 2 (Implement + Review)", len(ag.reqs))
 	}
-	if got := tickets.claimed; !equalInts(got, []int{7}) {
-		t.Errorf("claimed = %v, want [7] only", got)
+	if got := tickets.stamped; !equalInts(got, []int{7, 8}) {
+		t.Errorf("stamped = %v, want [7 8] (unfinished Tickets keep ship)", got)
+	}
+	if len(tickets.shipCleared) != 0 {
+		t.Errorf("ship cleared = %v, want none (Abort does not clear ship)", tickets.shipCleared)
+	}
+}
+
+func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven", OnShip: true},
+		{Number: 8, Title: "eight", OnShip: true},
+	}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+	queue := &fakeQueue{}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("first Run: want Abort error")
+	}
+	if queue.calls != 1 {
+		t.Fatalf("picker Confirm calls after Abort = %d, want 1", queue.calls)
+	}
+	if len(queue.saw[0]) != 2 || !queue.saw[0][0].OnShip || !queue.saw[0][1].OnShip {
+		t.Errorf("first picker candidates = %+v, want leftover ship hint on both", queue.saw[0])
+	}
+
+	// Leftover ship Tickets remain Ready; the next Run must open the picker
+	// again (no auto-resume), still showing leftover ship membership.
+	prs := &fakePRs{}
+	ag2 := committingAgent(t, prs, "ship/run")
+	r.Agent = ag2
+	r.PRs = prs
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if queue.calls != 2 {
+		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
+	}
+	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
+		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
+	}
+}
+
+func TestRun_nextRunAfterPartialProgressAlwaysOpensPicker(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven"},
+		{Number: 8, Title: "eight"},
+		{Number: 9, Title: "nine"},
+	}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	queue := &fakeQueue{}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 1},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if queue.calls != 1 {
+		t.Fatalf("picker Confirm calls after Partial Progress = %d, want 1", queue.calls)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7}) {
+		t.Errorf("done = %v, want [7] (one Iteration before Final)", got)
+	}
+	if len(tickets.ready) != 2 || !tickets.ready[0].OnShip || !tickets.ready[1].OnShip {
+		t.Errorf("leftover ready = %+v, want #8 and #9 still carrying ship", tickets.ready)
+	}
+
+	// Remaining ship Tickets stay Ready; the next Run must open the picker
+	// again (no auto-resume), still showing leftover ship membership.
+	prs2 := &fakePRs{}
+	ag2 := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if isFinalPrompt(req.Prompt) {
+			prs2.openPR("ship/run")
+			return nil
+		}
+		if idx%2 == 1 {
+			writeAndCommit(t, req.Workspace, fmt.Sprintf("partial-%d.txt", idx), "more\n", "continue after partial")
+		}
+		return nil
+	}}
+	r.Agent = ag2
+	r.PRs = prs2
+	r.Config.MaxIterations = 10
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if queue.calls != 2 {
+		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
+	}
+	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
+		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
 	}
 }
 
@@ -632,15 +937,49 @@ func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, 
 	return work(ctx)
 }
 
+// fakeQueue is the injectable picker/queue port for Orchestrator tests.
+// Without confirmFn it confirms every candidate in order. With confirmFn it
+// returns that selection (drop / reorder / empty / cancel) instead.
+type fakeQueue struct {
+	confirmed []int
+	calls     int
+	saw       [][]ticket.Ticket
+	confirmFn func(candidates []ticket.Ticket) ([]ticket.Ticket, error)
+}
+
+func (f *fakeQueue) Confirm(_ context.Context, candidates []ticket.Ticket) ([]ticket.Ticket, error) {
+	f.calls++
+	cp := make([]ticket.Ticket, len(candidates))
+	copy(cp, candidates)
+	f.saw = append(f.saw, cp)
+
+	var out []ticket.Ticket
+	var err error
+	if f.confirmFn != nil {
+		out, err = f.confirmFn(candidates)
+	} else {
+		out = make([]ticket.Ticket, len(candidates))
+		copy(out, candidates)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range out {
+		f.confirmed = append(f.confirmed, t.Number)
+	}
+	return out, nil
+}
+
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
-// Ready for Agent queue so re-listing shrinks like the real tracker.
+// Ready for Agent queue so the in-memory set can change mid-Run like a tracker.
 type fakeTickets struct {
-	ready     []ticket.Ticket
-	claimed   []int
-	doneList  []int
-	aborted   []int
-	ensured   bool
-	ensureErr error
+	ready       []ticket.Ticket
+	stamped     []int
+	shipCleared []int
+	doneList    []int
+	ensured     bool
+	ensureErr   error
+	afterStamp  func(*fakeTickets)
 }
 
 func (f *fakeTickets) EnsureLabels(context.Context) error {
@@ -654,12 +993,23 @@ func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error
 	return out, nil
 }
 
-func (f *fakeTickets) Claim(_ context.Context, t ticket.Ticket) error {
-	f.claimed = append(f.claimed, t.Number)
+func (f *fakeTickets) Stamp(_ context.Context, tickets []ticket.Ticket) error {
+	for _, t := range tickets {
+		f.stamped = append(f.stamped, t.Number)
+		for i := range f.ready {
+			if f.ready[i].Number == t.Number {
+				f.ready[i].OnShip = true
+			}
+		}
+	}
+	if f.afterStamp != nil {
+		f.afterStamp(f)
+	}
 	return nil
 }
 
 func (f *fakeTickets) Done(_ context.Context, t ticket.Ticket) error {
+	f.shipCleared = append(f.shipCleared, t.Number)
 	f.doneList = append(f.doneList, t.Number)
 	kept := f.ready[:0]
 	for _, r := range f.ready {
@@ -668,11 +1018,6 @@ func (f *fakeTickets) Done(_ context.Context, t ticket.Ticket) error {
 		}
 	}
 	f.ready = kept
-	return nil
-}
-
-func (f *fakeTickets) Abort(_ context.Context, t ticket.Ticket) error {
-	f.aborted = append(f.aborted, t.Number)
 	return nil
 }
 

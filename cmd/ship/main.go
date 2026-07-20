@@ -52,6 +52,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
 		Tickets:  gh,
+		Queue:    run.Interactive{Out: stderr},
 		Agent:    agent.Cursor{Bin: cfg.Agent},
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
