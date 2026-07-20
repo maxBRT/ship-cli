@@ -49,7 +49,7 @@ func defaultConfig() Config {
 	return Config{
 		Agent:         "agent",
 		MaxIterations: 10,
-		Timeout:       10 * time.Minute,
+		Timeout:       20 * time.Minute,
 	}
 }
 
