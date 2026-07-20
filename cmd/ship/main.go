@@ -36,7 +36,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 		return 1
 	}
 	if created {
-		fmt.Fprintln(stderr, "created .ship.yaml with defaults")
+		fmt.Fprintln(stderr, "created .ship/config.yaml with defaults")
 	}
 
 	cfg, err := run.ParseConfig(args, dir)
@@ -73,10 +73,10 @@ func runInit(stderr io.Writer, dir string) int {
 		return 1
 	}
 	if !created {
-		fmt.Fprintln(stderr, ".ship.yaml already exists")
+		fmt.Fprintln(stderr, ".ship/config.yaml already exists")
 		return 0
 	}
-	fmt.Fprintln(stderr, "created .ship.yaml with defaults")
+	fmt.Fprintln(stderr, "created .ship/config.yaml with defaults")
 	return 0
 }
 

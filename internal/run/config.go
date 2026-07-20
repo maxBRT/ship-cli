@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Config holds the Run configuration parsed from .ship.yaml and flags.
+// Config holds the Run configuration parsed from .ship/config.yaml and flags.
 type Config struct {
 	Branch        string
 	Feature       string
@@ -36,7 +36,7 @@ Flags:
 	fs.PrintDefaults()
 	fmt.Fprintf(w, `
 Config:
-  .ship.yaml at the checkout root (defaults → YAML → flags).
+  .ship/config.yaml at the checkout root (defaults → YAML → flags).
   Run "ship init" to create one with filled defaults.
 `)
 }
@@ -60,7 +60,7 @@ func newFlagSet(cfg *Config) *flag.FlagSet {
 	return fs
 }
 
-// ParseConfig builds a Run Config from .ship.yaml in dir, then applies flags.
+// ParseConfig builds a Run Config from .ship/config.yaml in dir, then applies flags.
 // YAML overrides built-in defaults; flags override YAML.
 func ParseConfig(args []string, dir string) (Config, error) {
 	cfg, err := LoadConfig(dir)

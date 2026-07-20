@@ -11,7 +11,11 @@ import (
 
 func writeShipYAML(t *testing.T, dir, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte(content), 0o644); err != nil {
+	path := filepath.Join(dir, ".ship", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -10,6 +10,21 @@ import (
 	"github.com/maxBRT/ship-cli/internal/run"
 )
 
+func shipConfigPath(dir string) string {
+	return filepath.Join(dir, ".ship", "config.yaml")
+}
+
+func writeShipConfig(t *testing.T, dir, content string) {
+	t.Helper()
+	path := shipConfigPath(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInitConfig_writesFilledDefaults(t *testing.T) {
 	dir := t.TempDir()
 
@@ -21,9 +36,9 @@ func TestInitConfig_writesFilledDefaults(t *testing.T) {
 		t.Fatal("InitConfig: want created=true")
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, ".ship.yaml"))
+	data, err := os.ReadFile(shipConfigPath(dir))
 	if err != nil {
-		t.Fatalf("read .ship.yaml: %v", err)
+		t.Fatalf("read .ship/config.yaml: %v", err)
 	}
 	got := string(data)
 	for _, want := range []string{
@@ -35,40 +50,16 @@ func TestInitConfig_writesFilledDefaults(t *testing.T) {
 		"timeout: 10m",
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf(".ship.yaml missing %q; got:\n%s", want, got)
+			t.Errorf(".ship/config.yaml missing %q; got:\n%s", want, got)
 		}
-	}
-}
-
-func TestInitConfig_ensuresGitignore(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("bin/\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := run.InitConfig(dir); err != nil {
-		t.Fatalf("InitConfig: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if err != nil {
-		t.Fatalf("read .gitignore: %v", err)
-	}
-	if !strings.Contains(string(data), ".ship.yaml") {
-		t.Errorf(".gitignore missing .ship.yaml; got:\n%s", data)
-	}
-	if !strings.Contains(string(data), "bin/") {
-		t.Errorf(".gitignore lost existing entry; got:\n%s", data)
 	}
 }
 
 func TestInitConfig_alreadyExistsDoesNotOverwrite(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".ship.yaml")
+	path := shipConfigPath(dir)
 	original := "branch: keep-me\n"
-	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeShipConfig(t, dir, original)
 
 	created, err := run.InitConfig(dir)
 	if err != nil {
@@ -87,29 +78,6 @@ func TestInitConfig_alreadyExistsDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-func TestInitConfig_existingFileStillEnsuresGitignore(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte("branch: x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	created, err := run.InitConfig(dir)
-	if err != nil {
-		t.Fatalf("InitConfig: %v", err)
-	}
-	if created {
-		t.Fatal("want created=false")
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if err != nil {
-		t.Fatalf("read .gitignore: %v", err)
-	}
-	if !strings.Contains(string(data), ".ship.yaml") {
-		t.Errorf(".gitignore missing .ship.yaml; got:\n%s", data)
-	}
-}
-
 func TestLoadConfig_readsAllFields(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: feat/widget
@@ -119,9 +87,7 @@ model: composer
 max_iterations: 3
 timeout: 5m
 `
-	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeShipConfig(t, dir, content)
 
 	cfg, err := run.LoadConfig(dir)
 	if err != nil {
@@ -155,9 +121,7 @@ agent: agent
 model: ""
 timeout: 10m
 `
-	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeShipConfig(t, dir, content)
 
 	_, err := run.LoadConfig(dir)
 	if err == nil {
@@ -178,9 +142,7 @@ max_iterations: 10
 timeout: 10m
 extra_thing: ignored
 `
-	if err := os.WriteFile(filepath.Join(dir, ".ship.yaml"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeShipConfig(t, dir, content)
 
 	cfg, err := run.LoadConfig(dir)
 	if err != nil {
