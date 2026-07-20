@@ -16,13 +16,30 @@ import (
 )
 
 func main() {
-	os.Exit(Main(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, "."))
+	os.Exit(Main(os.Args[1:], os.Stdout, os.Stderr, "."))
 }
 
 // Main is the testable CLI entrypoint. It parses Run configuration and drives
 // the Run orchestrator over the checkout in dir.
-func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, dir string) int {
-	cfg, err := run.ParseConfig(args, getenv)
+func Main(args []string, stdout, stderr io.Writer, dir string) int {
+	if len(args) > 0 && args[0] == "init" {
+		return runInit(stderr, dir)
+	}
+	if wantsHelp(args) {
+		run.WriteUsage(stdout)
+		return 0
+	}
+
+	created, err := run.InitConfig(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if created {
+		fmt.Fprintln(stderr, "created .ship/config.yaml with defaults")
+	}
+
+	cfg, err := run.ParseConfig(args, dir)
 	if errors.Is(err, flag.ErrHelp) {
 		run.WriteUsage(stdout)
 		return 0
@@ -32,7 +49,6 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		return 1
 	}
 
-	color := getenv("NO_COLOR") == ""
 	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
 		Tickets:  gh,
@@ -40,7 +56,7 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
-		Throbber: throbber.Line{Out: stderr, Color: color},
+		Throbber: throbber.Line{Out: stderr, Color: true},
 		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {
@@ -48,4 +64,27 @@ func Main(args []string, getenv func(string) string, stdout, stderr io.Writer, d
 		return 1
 	}
 	return 0
+}
+
+func runInit(stderr io.Writer, dir string) int {
+	created, err := run.InitConfig(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !created {
+		fmt.Fprintln(stderr, ".ship/config.yaml already exists")
+		return 0
+	}
+	fmt.Fprintln(stderr, "created .ship/config.yaml with defaults")
+	return 0
+}
+
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
