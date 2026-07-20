@@ -15,10 +15,91 @@ import (
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/observe"
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
 )
+
+func TestRun_afterPhase_dumpsHighSignalToolAndTokenLines(t *testing.T) {
+	// Fake Agent emits curated events into the Observer sink. After each Phase
+	// the Orchestrator dumps one-liners; mid-Phase Emit must not write yet,
+	// and the throbber still wraps the Phase wait.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 1, Title: "one"}}}
+	prs := &fakePRs{}
+	th := &recordingThrobber{}
+	var dump strings.Builder
+	obs := observe.New(&dump)
+	var midPhaseGrowth []int
+
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if req.Events == nil {
+			t.Fatal("PhaseRequest.Events = nil, want Observer sink")
+		}
+		before := dump.Len()
+		req.Events.Emit(observe.Event{
+			Kind:       observe.KindTool,
+			Name:       "Read",
+			DurationMS: 42,
+			Status:     observe.ToolOK,
+		})
+		req.Events.Emit(observe.Event{
+			Kind:    observe.KindPhaseEnd,
+			Outcome: observe.OutcomeSuccess,
+			Tokens: &observe.TokenCounts{
+				Input:      120,
+				Output:     45,
+				CacheRead:  10,
+				CacheWrite: 2,
+			},
+		})
+		midPhaseGrowth = append(midPhaseGrowth, dump.Len()-before)
+
+		if isFinalPrompt(req.Prompt) {
+			prs.openPR("ship/run")
+			return nil
+		}
+		if idx%2 == 1 {
+			writeAndCommit(t, req.Workspace, fmt.Sprintf("impl-%d.txt", idx), "work\n", "implement work")
+		}
+		return nil
+	}}
+
+	r := run.Orchestrator{
+		Tickets:  tickets,
+		Agent:    ag,
+		PRs:      prs,
+		Repo:     gitops.Repo{Dir: dir},
+		Config:   run.Config{Branch: "ship/run", MaxIterations: 10},
+		Throbber: th,
+		Observer: obs,
+		Stdout:   &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if want := []string{"Implement", "Review", "Final"}; !slices.Equal(th.phases, want) {
+		t.Errorf("throbber phases = %v, want %v", th.phases, want)
+	}
+	for i, growth := range midPhaseGrowth {
+		if growth != 0 {
+			t.Errorf("phase %d dump grew by %d mid-Phase, want 0 (throbber-only)", i+1, growth)
+		}
+	}
+
+	got := dump.String()
+	// Three Phases each dump the same worked-example lines.
+	wantTool := "tool  Read  42ms  ok"
+	wantTokens := "tokens  input=120 output=45 cache_read=10 cache_write=2"
+	if c := strings.Count(got, wantTool); c != 3 {
+		t.Errorf("tool dump lines = %d, want 3; got:\n%s", c, got)
+	}
+	if c := strings.Count(got, wantTokens); c != 3 {
+		t.Errorf("token dump lines = %d, want 3; got:\n%s", c, got)
+	}
+}
 
 func TestRun_wrapsEachPhaseInThrobberDuring(t *testing.T) {
 	dir := initTempRepo(t)
