@@ -37,10 +37,12 @@ type PullRequests interface {
 //
 // It first ensures the Ready for Agent and In Progress tracker labels exist.
 // With no Ready for Agent Tickets it reports that and returns without touching
-// the branch. Otherwise it prepares the Run branch, then processes Tickets one
-// Iteration each (Implement Phase then Review Phase) up to the max-iterations
-// limit, stopping when the queue drains or the limit is hit, then runs Final.
-// A failed Phase, missing side effect, or timeout Aborts the Run.
+// the branch. Otherwise it prepares the Run branch, then walks a frozen
+// snapshot of that Ready list one Iteration each (Implement Phase then Review
+// Phase) up to the max-iterations limit, stopping when the snapshot drains or
+// the limit is hit, then runs Final. Mid-Run tracker changes do not rewrite
+// which Tickets are processed or in what order. A failed Phase, missing side
+// effect, or timeout Aborts the Run.
 func (r Orchestrator) Run(ctx context.Context) error {
 	if err := r.Tickets.EnsureLabels(ctx); err != nil {
 		return fmt.Errorf("ensure tracker labels: %w", err)
@@ -63,8 +65,8 @@ func (r Orchestrator) Run(ctx context.Context) error {
 
 	var done []ticket.Ticket
 	iterations := 0
-	for iterations < r.Config.MaxIterations && len(ready) > 0 {
-		t := ready[0]
+	for iterations < r.Config.MaxIterations && iterations < len(ready) {
+		t := ready[iterations]
 		iterations++
 		fmt.Fprintf(r.stdout(), "Iteration %d: Ticket #%d %s\n", iterations, t.Number, t.Title)
 
@@ -72,18 +74,13 @@ func (r Orchestrator) Run(ctx context.Context) error {
 			return err
 		}
 		done = append(done, t)
-
-		ready, err = r.Tickets.ListReady(ctx, r.Config.Feature)
-		if err != nil {
-			return fmt.Errorf("list Ready for Agent Tickets: %w", err)
-		}
 	}
 
 	// Final only when at least one Iteration succeeded ("when there was work").
 	if len(done) == 0 {
 		return nil
 	}
-	partial := iterations >= r.Config.MaxIterations && len(ready) > 0
+	partial := iterations >= r.Config.MaxIterations && iterations < len(ready)
 	return r.final(ctx, branch, done, partial)
 }
 

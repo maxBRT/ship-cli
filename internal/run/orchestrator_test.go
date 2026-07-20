@@ -170,6 +170,45 @@ func TestRun_processesEachTicketThroughClaimImplementReviewDone(t *testing.T) {
 	}
 }
 
+func TestRun_processesFrozenReadyOrderDespiteMidRunReadyChanges(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{
+		ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}},
+		afterClaim: func(f *fakeTickets, claimed ticket.Ticket) {
+			if claimed.Number == 7 {
+				// Mid-Run tracker rewrite: #99 jumps ahead and #8 disappears.
+				// A re-list between Iterations would process #99 next; the
+				// frozen snapshot must still walk #7 then #8.
+				f.ready = []ticket.Ticket{{Number: 99, Title: "intruder"}}
+			}
+		},
+	}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
+		t.Errorf("claimed = %v, want [7 8] (frozen Ready order)", got)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
+		t.Errorf("done = %v, want [7 8] (frozen Ready order)", got)
+	}
+	if slices.Contains(tickets.claimed, 99) || slices.Contains(tickets.doneList, 99) {
+		t.Errorf("Run must ignore mid-Run Ready changes; claimed=%v done=%v", tickets.claimed, tickets.doneList)
+	}
+}
+
 func TestRun_skipsFinalWhenNoSuccessfulIteration(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
@@ -633,14 +672,15 @@ func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, 
 }
 
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
-// Ready for Agent queue so re-listing shrinks like the real tracker.
+// Ready for Agent queue so the in-memory set can change mid-Run like a tracker.
 type fakeTickets struct {
-	ready     []ticket.Ticket
-	claimed   []int
-	doneList  []int
-	aborted   []int
-	ensured   bool
-	ensureErr error
+	ready      []ticket.Ticket
+	claimed    []int
+	doneList   []int
+	aborted    []int
+	ensured    bool
+	ensureErr  error
+	afterClaim func(*fakeTickets, ticket.Ticket)
 }
 
 func (f *fakeTickets) EnsureLabels(context.Context) error {
@@ -656,6 +696,9 @@ func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error
 
 func (f *fakeTickets) Claim(_ context.Context, t ticket.Ticket) error {
 	f.claimed = append(f.claimed, t.Number)
+	if f.afterClaim != nil {
+		f.afterClaim(f, t)
+	}
 	return nil
 }
 
