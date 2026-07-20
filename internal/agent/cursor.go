@@ -43,7 +43,7 @@ func (c Cursor) RunPhase(ctx context.Context, req PhaseRequest) error {
 		args = append(args, "--model", req.Model)
 	}
 
-	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	cmd := exec.CommandContext(ctx, c.bin(), args...) // #nosec G204 -- Cursor agent CLI; args built by Ship
 	cmd.Dir = req.Workspace
 	cmd.Stdin = strings.NewReader(req.Prompt)
 

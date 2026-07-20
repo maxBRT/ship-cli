@@ -27,7 +27,7 @@ func (g *GitHub) exec() Exec {
 }
 
 func defaultExec(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := exec.CommandContext(ctx, "gh", args...) // #nosec G204 -- fixed gh binary; args built by Ship
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
