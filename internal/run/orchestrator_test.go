@@ -199,13 +199,13 @@ func TestRun_processesFrozenReadyOrderDespiteMidRunReadyChanges(t *testing.T) {
 	}
 
 	if got := tickets.claimed; !equalInts(got, []int{7, 8}) {
-		t.Errorf("claimed = %v, want [7 8] (frozen Ready order)", got)
+		t.Errorf("claimed = %v, want [7 8] (frozen Ready for Agent order)", got)
 	}
 	if got := tickets.doneList; !equalInts(got, []int{7, 8}) {
-		t.Errorf("done = %v, want [7 8] (frozen Ready order)", got)
+		t.Errorf("done = %v, want [7 8] (frozen Ready for Agent order)", got)
 	}
 	if slices.Contains(tickets.claimed, 99) || slices.Contains(tickets.doneList, 99) {
-		t.Errorf("Run must ignore mid-Run Ready changes; claimed=%v done=%v", tickets.claimed, tickets.doneList)
+		t.Errorf("Run must ignore mid-Run Ready for Agent changes; claimed=%v done=%v", tickets.claimed, tickets.doneList)
 	}
 }
 

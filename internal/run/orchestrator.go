@@ -38,11 +38,11 @@ type PullRequests interface {
 // It first ensures the Ready for Agent and In Progress tracker labels exist.
 // With no Ready for Agent Tickets it reports that and returns without touching
 // the branch. Otherwise it prepares the Run branch, then walks a frozen
-// snapshot of that Ready list one Iteration each (Implement Phase then Review
-// Phase) up to the max-iterations limit, stopping when the snapshot drains or
-// the limit is hit, then runs Final. Mid-Run tracker changes do not rewrite
-// which Tickets are processed or in what order. A failed Phase, missing side
-// effect, or timeout Aborts the Run.
+// snapshot of that Ready for Agent list one Iteration each (Implement Phase
+// then Review Phase) up to the max-iterations limit, stopping when the
+// snapshot drains or the limit is hit, then runs Final. Mid-Run tracker
+// changes do not rewrite which Tickets are processed or in what order. A
+// failed Phase, missing side effect, or timeout Aborts the Run.
 func (r Orchestrator) Run(ctx context.Context) error {
 	if err := r.Tickets.EnsureLabels(ctx); err != nil {
 		return fmt.Errorf("ensure tracker labels: %w", err)
