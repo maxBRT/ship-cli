@@ -180,12 +180,11 @@ func TestRun_processesFrozenShipQueueDespiteMidRunReadyChanges(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{
 		ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}},
-		afterStamp: func(f *fakeTickets, stamped []ticket.Ticket) {
+		afterStamp: func(f *fakeTickets) {
 			// Mid-Run tracker rewrite after stamp: #99 jumps ahead and #8
 			// disappears from Ready. The frozen ship queue must still walk #7
 			// then #8.
 			f.ready = []ticket.Ticket{{Number: 99, Title: "intruder"}}
-			_ = stamped
 		},
 	}
 	prs := &fakePRs{}
@@ -700,7 +699,7 @@ type fakeTickets struct {
 	doneList    []int
 	ensured     bool
 	ensureErr   error
-	afterStamp  func(*fakeTickets, []ticket.Ticket)
+	afterStamp  func(*fakeTickets)
 }
 
 func (f *fakeTickets) EnsureLabels(context.Context) error {
@@ -719,7 +718,7 @@ func (f *fakeTickets) Stamp(_ context.Context, tickets []ticket.Ticket) error {
 		f.stamped = append(f.stamped, t.Number)
 	}
 	if f.afterStamp != nil {
-		f.afterStamp(f, tickets)
+		f.afterStamp(f)
 	}
 	return nil
 }

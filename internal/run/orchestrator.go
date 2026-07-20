@@ -16,8 +16,8 @@ import (
 // queue from Ready for Agent candidates, stamps that set, drives an Implement
 // then a Review Phase per Iteration, marks each Ticket Done, then runs Final
 // and verifies an open pull request. Phase failure Aborts (undo commits,
-// stop) without In Progress label restore. Ports stay behind interfaces so
-// tests can fake them.
+// stop) while leaving ship on unfinished Tickets. Ports stay behind interfaces
+// so tests can fake them.
 type Orchestrator struct {
 	Tickets  ticket.Port
 	Queue    Queue // optional; nil means AllCandidates
@@ -45,7 +45,7 @@ type PullRequests interface {
 // max-iterations limit, stopping when the queue drains or the limit is hit,
 // then runs Final. Mid-Run tracker changes do not rewrite which Tickets are
 // processed or in what order. A failed Phase, missing side effect, or timeout
-// Aborts the Run without In Progress label restore.
+// Aborts the Run, leaving ship on unfinished Tickets.
 func (r Orchestrator) Run(ctx context.Context) error {
 	if err := r.Tickets.EnsureLabels(ctx); err != nil {
 		return fmt.Errorf("ensure tracker labels: %w", err)
