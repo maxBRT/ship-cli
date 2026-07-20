@@ -43,7 +43,7 @@ func (r Repo) HasCommitsSince(rp RestorePoint) (bool, error) {
 }
 
 func (r Repo) gitOutput(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) // #nosec G204 -- fixed git binary; args built by Ship
 	cmd.Dir = r.Dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

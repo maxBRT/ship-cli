@@ -4,11 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 )
 
-// Config holds the Run configuration parsed from flags and environment.
+// Config holds the Run configuration parsed from .ship/config.yaml and flags.
 type Config struct {
 	Branch        string
 	Feature       string
@@ -22,11 +21,13 @@ type Config struct {
 func WriteUsage(w io.Writer) {
 	fmt.Fprintf(w, `ship - run a sequential Ticket Run in the current checkout.
 
-A Run claims Ready for Agent Tickets, processes each through one Iteration
-(Implement Phase then Review Phase), then a Final Phase.
+A Run confirms a ship queue from Ready for Agent Tickets via an interactive
+picker, processes each through one Iteration (Implement Phase then Review
+Phase), then a Final Phase.
 
 Usage:
   ship [flags]
+  ship init
 
 Flags:
 `)
@@ -35,13 +36,9 @@ Flags:
 	fs.SetOutput(w)
 	fs.PrintDefaults()
 	fmt.Fprintf(w, `
-Environment (overridden by flags):
-  SHIP_BRANCH           same as --branch
-  SHIP_FEATURE          same as --feature
-  SHIP_AGENT            same as --agent
-  SHIP_MODEL            same as --model
-  SHIP_MAX_ITERATIONS   same as --max-iterations
-  SHIP_PHASE_TIMEOUT    same as --timeout
+Config:
+  .ship/config.yaml at the checkout root (defaults → YAML → flags).
+  Run "ship init" to create one with filled defaults.
 `)
 }
 
@@ -64,36 +61,12 @@ func newFlagSet(cfg *Config) *flag.FlagSet {
 	return fs
 }
 
-// ParseConfig builds a Run Config from args and getenv.
-// Environment overrides defaults; flags override environment.
-func ParseConfig(args []string, getenv func(string) string) (Config, error) {
-	cfg := defaultConfig()
-
-	if v := getenv("SHIP_BRANCH"); v != "" {
-		cfg.Branch = v
-	}
-	if v := getenv("SHIP_FEATURE"); v != "" {
-		cfg.Feature = v
-	}
-	if v := getenv("SHIP_AGENT"); v != "" {
-		cfg.Agent = v
-	}
-	if v := getenv("SHIP_MODEL"); v != "" {
-		cfg.Model = v
-	}
-	if v := getenv("SHIP_MAX_ITERATIONS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("SHIP_MAX_ITERATIONS: invalid integer %q", v)
-		}
-		cfg.MaxIterations = n
-	}
-	if v := getenv("SHIP_PHASE_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("SHIP_PHASE_TIMEOUT: invalid duration %q", v)
-		}
-		cfg.Timeout = d
+// ParseConfig builds a Run Config from .ship/config.yaml in dir, then applies flags.
+// YAML overrides built-in defaults; flags override YAML.
+func ParseConfig(args []string, dir string) (Config, error) {
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		return Config{}, err
 	}
 
 	fs := newFlagSet(&cfg)

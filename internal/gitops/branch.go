@@ -37,7 +37,7 @@ func (r Repo) EnsureBranch(name string) (string, error) {
 }
 
 func (r Repo) branchExists(name string) (bool, error) {
-	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+name) // #nosec G204 -- fixed git binary; branch name from Ship
 	cmd.Dir = r.Dir
 	err := cmd.Run()
 	if err == nil {
@@ -50,7 +50,7 @@ func (r Repo) branchExists(name string) (bool, error) {
 }
 
 func (r Repo) git(args ...string) error {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) // #nosec G204 -- fixed git binary; args built by Ship
 	cmd.Dir = r.Dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

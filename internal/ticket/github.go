@@ -27,7 +27,7 @@ func (g *GitHub) exec() Exec {
 }
 
 func defaultExec(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := exec.CommandContext(ctx, "gh", args...) // #nosec G204 -- fixed gh binary; args built by Ship
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
@@ -47,17 +47,6 @@ query($owner: String!, $name: String!) {
         title
         createdAt
         labels(first: 20) { nodes { name } }
-        issueFieldValues(first: 20) {
-          nodes {
-            __typename
-            ... on IssueFieldSingleSelectValue {
-              value
-              field {
-                ... on IssueFieldSingleSelect { name }
-              }
-            }
-          }
-        }
       }
     }
   }
@@ -86,26 +75,15 @@ type gqlIssue struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
 	} `json:"labels"`
-	IssueFieldValues struct {
-		Nodes []gqlFieldValue `json:"nodes"`
-	} `json:"issueFieldValues"`
 }
 
-type gqlFieldValue struct {
-	Typename string `json:"__typename"`
-	Value    string `json:"value"`
-	Field    struct {
-		Name string `json:"name"`
-	} `json:"field"`
-}
-
-type rankedTicket struct {
+type orderedTicket struct {
 	Ticket
-	rank      int
 	createdAt time.Time
 }
 
-// ListReady returns Ready for Agent Tickets ordered by priority then oldest.
+// ListReady returns Ready for Agent Tickets in stable default order:
+// ascending issue number, then oldest created date.
 func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error) {
 	execGH := g.exec()
 
@@ -136,27 +114,30 @@ func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error
 		return nil, fmt.Errorf("parse graphql list: %w", err)
 	}
 
-	ranked := make([]rankedTicket, 0, len(resp.Data.Repository.Issues.Nodes))
+	ordered := make([]orderedTicket, 0, len(resp.Data.Repository.Issues.Nodes))
 	for _, issue := range resp.Data.Repository.Issues.Nodes {
 		if feature != "" && !hasLabel(issue, feature) {
 			continue
 		}
-		ranked = append(ranked, rankedTicket{
-			Ticket:    Ticket{Number: issue.Number, Title: issue.Title},
-			rank:      priorityRank(issue),
+		ordered = append(ordered, orderedTicket{
+			Ticket: Ticket{
+				Number: issue.Number,
+				Title:  issue.Title,
+				OnShip: hasLabel(issue, LabelShip),
+			},
 			createdAt: issue.CreatedAt,
 		})
 	}
 
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if ranked[i].rank != ranked[j].rank {
-			return ranked[i].rank < ranked[j].rank
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Number != ordered[j].Number {
+			return ordered[i].Number < ordered[j].Number
 		}
-		return ranked[i].createdAt.Before(ranked[j].createdAt)
+		return ordered[i].createdAt.Before(ordered[j].createdAt)
 	})
 
-	outTickets := make([]Ticket, len(ranked))
-	for i, r := range ranked {
+	outTickets := make([]Ticket, len(ordered))
+	for i, r := range ordered {
 		outTickets[i] = r.Ticket
 	}
 	return outTickets, nil
@@ -171,44 +152,18 @@ func hasLabel(issue gqlIssue, want string) bool {
 	return false
 }
 
-func priorityRank(issue gqlIssue) int {
-	for _, fv := range issue.IssueFieldValues.Nodes {
-		if !strings.EqualFold(fv.Field.Name, "Priority") {
-			continue
-		}
-		return rankPriorityValue(fv.Value)
-	}
-	return 100
-}
-
-func rankPriorityValue(v string) int {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "p0", "critical", "urgent":
-		return 0
-	case "p1", "high":
-		return 1
-	case "p2", "medium", "med":
-		return 2
-	case "p3", "low":
-		return 3
-	case "":
-		return 100
-	default:
-		return 50
-	}
-}
-
-// requiredLabels are the tracker labels Ship Claim and Abort transitions need.
+// requiredLabels are the tracker labels Ship needs for Ready for Agent triage
+// and ship queue membership.
 var requiredLabels = []struct {
 	Name        string
 	Description string
 	Color       string
 }{
-	{LabelReadyForAgent, "Eligible for a Ship Run to Claim", "0E8A16"},
-	{LabelInProgress, "A Ship Run is working this Ticket", "FBCA04"},
+	{LabelReadyForAgent, "Eligible for a Ship Run queue", "0E8A16"},
+	{LabelShip, "Remaining queue membership for a Ship Run", "9ADD98"},
 }
 
-// EnsureLabels creates Ready for Agent and In Progress when missing.
+// EnsureLabels creates Ready for Agent and ship when missing.
 func (g *GitHub) EnsureLabels(ctx context.Context) error {
 	execGH := g.exec()
 	out, err := execGH(ctx, "label", "list", "--json", "name", "--limit", "1000")
@@ -240,27 +195,29 @@ func (g *GitHub) EnsureLabels(ctx context.Context) error {
 	return nil
 }
 
-// Claim moves a Ticket from Ready for Agent to In Progress.
-func (g *GitHub) Claim(ctx context.Context, t Ticket) error {
-	_, err := g.exec()(ctx, "issue", "edit", fmt.Sprintf("%d", t.Number),
-		"--remove-label", LabelReadyForAgent,
-		"--add-label", LabelInProgress,
-	)
-	return err
+// Stamp adds ship to each Ticket without removing Ready for Agent.
+func (g *GitHub) Stamp(ctx context.Context, tickets []Ticket) error {
+	for _, t := range tickets {
+		_, err := g.exec()(ctx, "issue", "edit", fmt.Sprintf("%d", t.Number),
+			"--add-label", LabelShip,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// Done marks a Ticket Done by closing its GitHub issue.
+// Done removes ship and closes the Ticket's GitHub issue.
 func (g *GitHub) Done(ctx context.Context, t Ticket) error {
-	_, err := g.exec()(ctx, "issue", "close", fmt.Sprintf("%d", t.Number))
-	return err
-}
-
-// Abort restores a Ticket from In Progress to Ready for Agent.
-func (g *GitHub) Abort(ctx context.Context, t Ticket) error {
-	_, err := g.exec()(ctx, "issue", "edit", fmt.Sprintf("%d", t.Number),
-		"--remove-label", LabelInProgress,
-		"--add-label", LabelReadyForAgent,
+	execGH := g.exec()
+	_, err := execGH(ctx, "issue", "edit", fmt.Sprintf("%d", t.Number),
+		"--remove-label", LabelShip,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = execGH(ctx, "issue", "close", fmt.Sprintf("%d", t.Number))
 	return err
 }
 

@@ -8,7 +8,7 @@ import (
 
 func TestMain_helpDocumentsDomainLanguage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"--help"}, func(string) string { return "" }, &stdout, &stderr, t.TempDir())
+	code := Main([]string{"--help"}, &stdout, &stderr, t.TempDir())
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -22,7 +22,7 @@ func TestMain_helpDocumentsDomainLanguage(t *testing.T) {
 
 func TestMain_invalidFlagExitsNonZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"--not-a-real-flag"}, func(string) string { return "" }, &stdout, &stderr, t.TempDir())
+	code := Main([]string{"--not-a-real-flag"}, &stdout, &stderr, t.TempDir())
 	if code == 0 {
 		t.Fatal("exit = 0, want non-zero")
 	}
@@ -33,7 +33,7 @@ func TestMain_invalidFlagExitsNonZero(t *testing.T) {
 
 func TestMain_invalidTimeoutExitsNonZero(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Main([]string{"--timeout", "nope"}, func(string) string { return "" }, &stdout, &stderr, t.TempDir())
+	code := Main([]string{"--timeout", "nope"}, &stdout, &stderr, t.TempDir())
 	if code == 0 {
 		t.Fatal("exit = 0, want non-zero")
 	}
