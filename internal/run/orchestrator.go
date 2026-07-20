@@ -59,14 +59,11 @@ func (r Orchestrator) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("prepare Run branch: %w", err)
 	}
-	fmt.Fprintf(r.stdout(), "Run branch: %s\n", branch)
-
 	var done []ticket.Ticket
 	iterations := 0
 	for iterations < r.Config.MaxIterations && len(ready) > 0 {
 		t := ready[0]
 		iterations++
-		fmt.Fprintf(r.stdout(), "Iteration %d: Ticket #%d %s\n", iterations, t.Number, t.Title)
 
 		if err := r.iterate(ctx, t, branch, iterations); err != nil {
 			return err
