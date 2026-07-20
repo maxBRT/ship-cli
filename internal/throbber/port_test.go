@@ -15,7 +15,7 @@ func TestSilent_During_runsWorkAndReturnsItsError(t *testing.T) {
 	want := errors.New("phase failed")
 	called := false
 
-	err := throbber.Silent{}.During(context.Background(), "Implement", func(context.Context) error {
+	err := throbber.Silent{}.During(context.Background(), throbber.Status{Phase: "Implement"}, func(context.Context) error {
 		called = true
 		return want
 	})
@@ -29,7 +29,7 @@ func TestSilent_During_runsWorkAndReturnsItsError(t *testing.T) {
 }
 
 func TestSilent_During_returnsNilWhenWorkSucceeds(t *testing.T) {
-	err := throbber.Silent{}.During(context.Background(), "Review", func(context.Context) error {
+	err := throbber.Silent{}.During(context.Background(), throbber.Status{Phase: "Review"}, func(context.Context) error {
 		return nil
 	})
 	if err != nil {
@@ -37,10 +37,11 @@ func TestSilent_During_returnsNilWhenWorkSucceeds(t *testing.T) {
 	}
 }
 
-func TestTableau_During_nonTTY_successShowsWaitingAndDone(t *testing.T) {
+func TestLine_During_nonTTY_showsIterationPhaseTicket(t *testing.T) {
 	var buf bytes.Buffer
-	err := throbber.Tableau{Out: &buf, Color: false}.During(
-		context.Background(), "Implement",
+	err := throbber.Line{Out: &buf, Color: false}.During(
+		context.Background(),
+		throbber.Status{Phase: "Implement", Iteration: 2, Ticket: "#7 one"},
 		func(context.Context) error {
 			time.Sleep(5 * time.Millisecond)
 			return nil
@@ -50,28 +51,54 @@ func TestTableau_During_nonTTY_successShowsWaitingAndDone(t *testing.T) {
 		t.Fatalf("During: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "waiting on Implement") {
-		t.Errorf("output missing waiting line: %q", out)
+	if !strings.Contains(out, "Iteration 2") {
+		t.Errorf("output missing iteration: %q", out)
 	}
-	if !strings.Contains(out, "Implement") || !strings.Contains(out, "✓") {
+	if !strings.Contains(out, "Implement") {
+		t.Errorf("output missing phase: %q", out)
+	}
+	if !strings.Contains(out, "#7 one") {
+		t.Errorf("output missing ticket: %q", out)
+	}
+	if !strings.Contains(out, "✓") {
 		t.Errorf("output missing success finish: %q", out)
 	}
 }
 
-func TestTableau_During_nonTTY_failureShowsNoCheckmark(t *testing.T) {
+func TestLine_During_nonTTY_finalOmitsIterationAndTicket(t *testing.T) {
+	var buf bytes.Buffer
+	err := throbber.Line{Out: &buf, Color: false}.During(
+		context.Background(),
+		throbber.Status{Phase: "Final"},
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("During: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Final") {
+		t.Errorf("output missing Final: %q", out)
+	}
+	if strings.Contains(out, "Iteration") {
+		t.Errorf("Final wait must not show Iteration: %q", out)
+	}
+	if strings.Contains(out, "#") {
+		t.Errorf("Final wait must not show Ticket: %q", out)
+	}
+}
+
+func TestLine_During_nonTTY_failureShowsNoCheckmark(t *testing.T) {
 	var buf bytes.Buffer
 	want := errors.New("boom")
-	err := throbber.Tableau{Out: &buf, Color: false}.During(
-		context.Background(), "Review",
+	err := throbber.Line{Out: &buf, Color: false}.During(
+		context.Background(),
+		throbber.Status{Phase: "Review", Iteration: 1, Ticket: "#3 fix"},
 		func(context.Context) error { return want },
 	)
 	if !errors.Is(err, want) {
 		t.Fatalf("During = %v, want %v", err, want)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "waiting on Review") {
-		t.Errorf("output missing waiting line: %q", out)
-	}
 	if strings.Contains(out, "✓") {
 		t.Errorf("failure finish must not show checkmark: %q", out)
 	}

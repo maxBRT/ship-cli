@@ -68,7 +68,7 @@ func (r Orchestrator) Run(ctx context.Context) error {
 		iterations++
 		fmt.Fprintf(r.stdout(), "Iteration %d: Ticket #%d %s\n", iterations, t.Number, t.Title)
 
-		if err := r.iterate(ctx, t, branch); err != nil {
+		if err := r.iterate(ctx, t, branch, iterations); err != nil {
 			return err
 		}
 		done = append(done, t)
@@ -91,7 +91,7 @@ func (r Orchestrator) Run(ctx context.Context) error {
 // Phase (which must commit), the Review Phase (which may be commitless), then
 // Done. A failed Phase or missing side effect Aborts: restores the Ticket to
 // Ready for Agent, undoes that Ticket's commits, and stops the Run.
-func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string) error {
+func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string, iteration int) error {
 	if err := r.Tickets.Claim(ctx, t); err != nil {
 		return fmt.Errorf("claim Ticket #%d: %w", t.Number, err)
 	}
@@ -101,8 +101,9 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 		return r.abort(ctx, t, gitops.RestorePoint(""), fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err))
 	}
 
+	ticketLabel := fmt.Sprintf("#%d %s", t.Number, t.Title)
 	implInput := prompt.ImplementInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, "Implement", prompt.Implement(implInput)); err != nil {
+	if err := r.runPhase(ctx, throbber.Status{Phase: "Implement", Iteration: iteration, Ticket: ticketLabel}, prompt.Implement(implInput)); err != nil {
 		return r.abort(ctx, t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -115,7 +116,7 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 
 	reviewInput := prompt.ReviewInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, "Review", prompt.Review(reviewInput)); err != nil {
+	if err := r.runPhase(ctx, throbber.Status{Phase: "Review", Iteration: iteration, Ticket: ticketLabel}, prompt.Review(reviewInput)); err != nil {
 		return r.abort(ctx, t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -160,7 +161,7 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 		PartialProgress: partial,
 		MaxIterations:   r.Config.MaxIterations,
 	})
-	if err := r.runPhase(ctx, "Final", finalPrompt); err != nil {
+	if err := r.runPhase(ctx, throbber.Status{Phase: "Final"}, finalPrompt); err != nil {
 		return fmt.Errorf("Abort: Final Phase: %w", err)
 	}
 	open, err := r.PRs.HasOpenPR(ctx, branch)
@@ -173,7 +174,7 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 	return nil
 }
 
-func (r Orchestrator) runPhase(ctx context.Context, phase, promptText string) error {
+func (r Orchestrator) runPhase(ctx context.Context, status throbber.Status, promptText string) error {
 	work := func(ctx context.Context) error {
 		return r.Agent.RunPhase(ctx, agent.PhaseRequest{
 			Prompt:    promptText,
@@ -185,7 +186,7 @@ func (r Orchestrator) runPhase(ctx context.Context, phase, promptText string) er
 	if r.Throbber == nil {
 		return work(ctx)
 	}
-	return r.Throbber.During(ctx, phase, work)
+	return r.Throbber.During(ctx, status, work)
 }
 
 func (r Orchestrator) stdout() io.Writer {
