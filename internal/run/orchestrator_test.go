@@ -68,6 +68,9 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	if !tickets.ensured {
+		t.Error("EnsureLabels was not called before listing Ready for Agent Tickets")
+	}
 	if !strings.Contains(out.String(), "No Ready for Agent Tickets") {
 		t.Errorf("stdout = %q, want empty-queue message", out.String())
 	}
@@ -79,6 +82,40 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 	}
 	if len(ag.reqs) != 0 {
 		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+}
+
+func TestRun_ensureLabelsFailureStopsBeforeClaim(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{
+		ready:     []ticket.Ticket{{Number: 1, Title: "one"}},
+		ensureErr: errors.New("no permission to create labels"),
+	}
+	ag := &fakeAgent{}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run error = nil, want ensure labels failure")
+	}
+	if !strings.Contains(err.Error(), "ensure tracker labels") {
+		t.Fatalf("Run error = %v, want ensure tracker labels wrap", err)
+	}
+	if len(tickets.claimed) != 0 {
+		t.Errorf("claimed = %v, want none when EnsureLabels fails", tickets.claimed)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
 	}
 }
 
@@ -597,10 +634,17 @@ func (r *recordingThrobber) During(ctx context.Context, phase string, work func(
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
 // Ready for Agent queue so re-listing shrinks like the real tracker.
 type fakeTickets struct {
-	ready    []ticket.Ticket
-	claimed  []int
-	doneList []int
-	aborted  []int
+	ready     []ticket.Ticket
+	claimed   []int
+	doneList  []int
+	aborted   []int
+	ensured   bool
+	ensureErr error
+}
+
+func (f *fakeTickets) EnsureLabels(context.Context) error {
+	f.ensured = true
+	return f.ensureErr
 }
 
 func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error) {
