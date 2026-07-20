@@ -29,7 +29,7 @@ Ticket state meaning the ticket's work for this run is finished and it should no
 _Avoid_: closed (as the domain name), complete, finished, resolved
 
 **Queue confirmation**:
-The act of selecting the ordered ticket set a run will process (today: all Ready for Agent candidates via a fakeable queue port; interactive picker comes next) and stamping that set with ship.
+The act of selecting the ordered ticket set a run will process via an interactive picker over Ready for Agent candidates (fakeable in tests) and stamping that set with ship.
 _Avoid_: Claim, pickup, lock, assign (unless talking about GitHub assignee specifically)
 
 **Iteration**:

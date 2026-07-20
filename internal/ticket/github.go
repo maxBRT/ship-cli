@@ -120,7 +120,11 @@ func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error
 			continue
 		}
 		ordered = append(ordered, orderedTicket{
-			Ticket:    Ticket{Number: issue.Number, Title: issue.Title},
+			Ticket: Ticket{
+				Number: issue.Number,
+				Title:  issue.Title,
+				OnShip: hasLabel(issue, LabelShip),
+			},
 			createdAt: issue.CreatedAt,
 		})
 	}

@@ -39,13 +39,14 @@ type PullRequests interface {
 //
 // It first ensures the Ready for Agent and ship tracker labels exist. With no
 // Ready for Agent Tickets it reports that and returns without touching the
-// branch. Otherwise it confirms a queue (default: all candidates), stamps
-// ship on that ordered set, prepares the Run branch, then walks that frozen
-// queue one Iteration each (Implement Phase then Review Phase) up to the
-// max-iterations limit, stopping when the queue drains or the limit is hit,
-// then runs Final. Mid-Run tracker changes do not rewrite which Tickets are
-// processed or in what order. A failed Phase, missing side effect, or timeout
-// Aborts the Run, leaving ship on unfinished Tickets.
+// branch. Otherwise it opens the queue picker (Interactive in production;
+// injectable in tests), stamps ship on the confirmed ordered set, prepares
+// the Run branch, then walks that frozen queue one Iteration each (Implement
+// Phase then Review Phase) up to the max-iterations limit, stopping when the
+// queue drains or the limit is hit, then runs Final. Mid-Run tracker changes
+// do not rewrite which Tickets are processed or in what order. A failed Phase,
+// missing side effect, or timeout Aborts the Run, leaving ship on unfinished
+// Tickets. Cancel or empty picker selection starts no Phases.
 func (r Orchestrator) Run(ctx context.Context) error {
 	if err := r.Tickets.EnsureLabels(ctx); err != nil {
 		return fmt.Errorf("ensure tracker labels: %w", err)

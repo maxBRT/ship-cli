@@ -7,6 +7,10 @@ import "context"
 type Ticket struct {
 	Number int
 	Title  string
+	// OnShip is true when the Ticket already carries leftover ship queue
+	// membership from a prior Abort or Partial Progress. The picker may show
+	// this as a hint; it never skips confirmation.
+	OnShip bool
 }
 
 // Label names on the GitHub tracker for Ticket states Ship manages.

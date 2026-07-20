@@ -100,6 +100,53 @@ func TestListReady_filtersByFeatureLabel(t *testing.T) {
 	}
 }
 
+func TestListReady_marksLeftoverShipMembership(t *testing.T) {
+	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
+		"repo view --json nameWithOwner": `{"nameWithOwner":"maxBRT/ship-cli"}`,
+		"api graphql": `{
+			"data": {
+				"repository": {
+					"issues": {
+						"nodes": [
+							{
+								"number": 7,
+								"title": "leftover",
+								"createdAt": "2026-01-01T00:00:00Z",
+								"labels": {"nodes": [
+									{"name": "ready-for-agent"},
+									{"name": "ship"}
+								]}
+							},
+							{
+								"number": 8,
+								"title": "fresh",
+								"createdAt": "2026-02-01T00:00:00Z",
+								"labels": {"nodes": [
+									{"name": "ready-for-agent"}
+								]}
+							}
+						]
+					}
+				}
+			}
+		}`,
+	})}
+
+	got, err := gh.ListReady(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListReady: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListReady len=%d, want 2", len(got))
+	}
+	if !got[0].OnShip {
+		t.Errorf("Ticket #7 OnShip = false, want true (leftover ship hint)")
+	}
+	if got[1].OnShip {
+		t.Errorf("Ticket #8 OnShip = true, want false")
+	}
+}
+
 func TestEnsureLabels_createsMissingShipLabels(t *testing.T) {
 	var creates [][]string
 	gh := &ticket.GitHub{Exec: func(ctx context.Context, args ...string) ([]byte, error) {

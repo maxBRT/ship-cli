@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,6 +81,113 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 	}
 	if len(tickets.stamped) != 0 {
 		t.Errorf("stamped = %v, want none on empty queue", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+}
+
+func TestRun_emptyPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}, {Number: 8, Title: "eight"}}}
+	ag := &fakeAgent{}
+	queue := &fakeQueue{selectFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+		return nil, nil // confirmed empty selection
+	}}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "No Tickets selected") {
+		t.Errorf("stdout = %q, want empty-selection message", out.String())
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none when picker confirms empty", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
+	}
+}
+
+func TestRun_canceledPickerSelectionDoesNotStampOrStartPhases(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	ag := &fakeAgent{}
+	queue := &fakeQueue{selectFn: func([]ticket.Ticket) ([]ticket.Ticket, error) {
+		return nil, errors.New("picker canceled")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run error = nil, want picker cancel failure")
+	}
+	if !strings.Contains(err.Error(), "confirm ship queue") {
+		t.Errorf("Run error = %v, want confirm ship queue wrap", err)
+	}
+	if !strings.Contains(err.Error(), "picker canceled") {
+		t.Errorf("Run error = %v, want underlying cancel", err)
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none when picker is canceled", tickets.stamped)
+	}
+	if len(ag.reqs) != 0 {
+		t.Errorf("agent called %d times, want 0", len(ag.reqs))
+	}
+	if b := currentBranch(t, dir); b != "main" {
+		t.Errorf("branch = %q, want main (no branch prepared)", b)
+	}
+}
+
+func TestRun_nonInteractivePickerFailsWithoutStamping(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	ag := &fakeAgent{}
+	queue := run.Interactive{
+		In:  strings.NewReader(""),
+		Out: io.Discard,
+		IsTerminal: func() bool {
+			return false
+		},
+	}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run error = nil, want non-interactive picker failure")
+	}
+	if !errors.Is(err, run.ErrNonInteractive) {
+		t.Errorf("Run error = %v, want ErrNonInteractive", err)
+	}
+	if len(tickets.stamped) != 0 {
+		t.Errorf("stamped = %v, want none on non-interactive misuse", tickets.stamped)
 	}
 	if len(ag.reqs) != 0 {
 		t.Errorf("agent called %d times, want 0", len(ag.reqs))
@@ -173,6 +281,54 @@ func TestRun_stampsShipQueueMembershipBeforeIterations(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Queue drained") {
 		t.Errorf("stdout = %q, want drain summary", out.String())
+	}
+}
+
+func TestRun_pickerConfirmedOrderIsRunOrder(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven"},
+		{Number: 8, Title: "eight"},
+		{Number: 9, Title: "nine"},
+	}}
+	prs := &fakePRs{}
+	ag := committingAgent(t, prs, "ship/run")
+	// Drop #7, reorder so #9 runs before #8.
+	queue := &fakeQueue{selectFn: func(candidates []ticket.Ticket) ([]ticket.Ticket, error) {
+		return []ticket.Ticket{candidates[2], candidates[1]}, nil
+	}}
+	var out strings.Builder
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &out,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !equalInts(queue.confirmed, []int{9, 8}) {
+		t.Errorf("queue confirmed = %v, want [9 8]", queue.confirmed)
+	}
+	if got := tickets.stamped; !equalInts(got, []int{9, 8}) {
+		t.Errorf("stamped = %v, want [9 8] (picker order)", got)
+	}
+	if got := tickets.doneList; !equalInts(got, []int{9, 8}) {
+		t.Errorf("done = %v, want [9 8] (picker order)", got)
+	}
+	if !strings.Contains(out.String(), "Iteration 1: Ticket #9") {
+		t.Errorf("stdout = %q, want first Iteration on #9", out.String())
+	}
+	if !strings.Contains(out.String(), "Iteration 2: Ticket #8") {
+		t.Errorf("stdout = %q, want second Iteration on #8", out.String())
+	}
+	if strings.Contains(out.String(), "Ticket #7") {
+		t.Errorf("stdout = %q, dropped Ticket #7 must not run", out.String())
 	}
 }
 
@@ -663,6 +819,52 @@ func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
 	}
 }
 
+func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{
+		{Number: 7, Title: "seven", OnShip: true},
+		{Number: 8, Title: "eight", OnShip: true},
+	}}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+	queue := &fakeQueue{}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Queue:   queue,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err == nil {
+		t.Fatal("first Run: want Abort error")
+	}
+	if queue.calls != 1 {
+		t.Fatalf("picker Confirm calls after Abort = %d, want 1", queue.calls)
+	}
+	if len(queue.saw[0]) != 2 || !queue.saw[0][0].OnShip || !queue.saw[0][1].OnShip {
+		t.Errorf("first picker candidates = %+v, want leftover ship hint on both", queue.saw[0])
+	}
+
+	// Leftover ship Tickets remain Ready; the next Run must open the picker
+	// again (no auto-resume), still showing leftover ship membership.
+	prs := &fakePRs{}
+	ag2 := committingAgent(t, prs, "ship/run")
+	r.Agent = ag2
+	r.PRs = prs
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if queue.calls != 2 {
+		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
+	}
+	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
+		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
+	}
+}
+
 // recordingThrobber records Phase labels and that work ran inside During.
 type recordingThrobber struct {
 	phases    []string
@@ -675,15 +877,33 @@ func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, 
 	return work(ctx)
 }
 
-// fakeQueue records Confirm and returns candidates unchanged (all-candidates
-// default for this ticket; interactive picker is a later ticket).
+// fakeQueue is the injectable picker/queue port for Orchestrator tests.
+// Without selectFn it confirms every candidate in order. With selectFn it
+// returns that selection (drop / reorder / empty / cancel) instead.
 type fakeQueue struct {
 	confirmed []int
+	calls     int
+	saw       [][]ticket.Ticket
+	selectFn  func(candidates []ticket.Ticket) ([]ticket.Ticket, error)
 }
 
 func (f *fakeQueue) Confirm(_ context.Context, candidates []ticket.Ticket) ([]ticket.Ticket, error) {
-	out := make([]ticket.Ticket, len(candidates))
-	copy(out, candidates)
+	f.calls++
+	cp := make([]ticket.Ticket, len(candidates))
+	copy(cp, candidates)
+	f.saw = append(f.saw, cp)
+
+	var out []ticket.Ticket
+	var err error
+	if f.selectFn != nil {
+		out, err = f.selectFn(candidates)
+	} else {
+		out = make([]ticket.Ticket, len(candidates))
+		copy(out, candidates)
+	}
+	if err != nil {
+		return nil, err
+	}
 	for _, t := range out {
 		f.confirmed = append(f.confirmed, t.Number)
 	}
