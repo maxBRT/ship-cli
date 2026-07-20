@@ -17,6 +17,10 @@ const (
 // Port is the tracker surface the Run orchestrator calls. Tests can fake it;
 // the GitHub implementation shells to gh.
 type Port interface {
+	// EnsureLabels creates the Ready for Agent and In Progress labels when
+	// they are missing from the tracker, so Claim and Abort can succeed.
+	EnsureLabels(ctx context.Context) error
+
 	// ListReady returns Tickets labeled Ready for Agent, optionally also
 	// matching feature, ordered by native GitHub priority then oldest.
 	ListReady(ctx context.Context, feature string) ([]Ticket, error)

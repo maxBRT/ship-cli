@@ -123,6 +123,85 @@ func TestListReady_filtersByFeatureLabel(t *testing.T) {
 	}
 }
 
+func TestEnsureLabels_createsMissingShipLabels(t *testing.T) {
+	var creates [][]string
+	gh := &ticket.GitHub{Exec: func(ctx context.Context, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if joined == "label list --json name --limit 1000" {
+			return []byte(`[{"name":"bug"}]`), nil
+		}
+		if len(args) >= 3 && args[0] == "label" && args[1] == "create" {
+			creates = append(creates, append([]string(nil), args...))
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected gh %s", joined)
+	}}
+
+	if err := gh.EnsureLabels(context.Background()); err != nil {
+		t.Fatalf("EnsureLabels: %v", err)
+	}
+	wantNames := []string{ticket.LabelReadyForAgent, ticket.LabelInProgress}
+	if len(creates) != len(wantNames) {
+		t.Fatalf("created=%v, want %v", creates, wantNames)
+	}
+	for i, name := range wantNames {
+		got := strings.Join(creates[i], " ")
+		if creates[i][2] != name {
+			t.Fatalf("created[%d] name=%q, want %q", i, creates[i][2], name)
+		}
+		if !strings.Contains(got, "--description ") || !strings.Contains(got, "--color ") {
+			t.Fatalf("create %q missing description/color: %q", name, got)
+		}
+	}
+}
+
+func TestEnsureLabels_skipsLabelsThatAlreadyExist(t *testing.T) {
+	var creates []string
+	gh := &ticket.GitHub{Exec: func(ctx context.Context, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if joined == "label list --json name --limit 1000" {
+			return []byte(fmt.Sprintf(
+				`[{"name":%q},{"name":%q},{"name":"bug"}]`,
+				ticket.LabelReadyForAgent, ticket.LabelInProgress,
+			)), nil
+		}
+		if len(args) >= 3 && args[0] == "label" && args[1] == "create" {
+			creates = append(creates, args[2])
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected gh %s", joined)
+	}}
+
+	if err := gh.EnsureLabels(context.Background()); err != nil {
+		t.Fatalf("EnsureLabels: %v", err)
+	}
+	if len(creates) != 0 {
+		t.Fatalf("created=%v, want none when labels already exist", creates)
+	}
+}
+
+func TestEnsureLabels_createsOnlyMissingLabel(t *testing.T) {
+	var creates []string
+	gh := &ticket.GitHub{Exec: func(ctx context.Context, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if joined == "label list --json name --limit 1000" {
+			return []byte(fmt.Sprintf(`[{"name":%q}]`, ticket.LabelReadyForAgent)), nil
+		}
+		if len(args) >= 3 && args[0] == "label" && args[1] == "create" {
+			creates = append(creates, args[2])
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected gh %s", joined)
+	}}
+
+	if err := gh.EnsureLabels(context.Background()); err != nil {
+		t.Fatalf("EnsureLabels: %v", err)
+	}
+	if len(creates) != 1 || creates[0] != ticket.LabelInProgress {
+		t.Fatalf("created=%v, want only %q", creates, ticket.LabelInProgress)
+	}
+}
+
 func TestClaim_transitionsReadyToInProgress(t *testing.T) {
 	var calls []string
 	gh := &ticket.GitHub{Exec: func(ctx context.Context, args ...string) ([]byte, error) {

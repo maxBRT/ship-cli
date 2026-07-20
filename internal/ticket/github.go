@@ -198,6 +198,48 @@ func rankPriorityValue(v string) int {
 	}
 }
 
+// requiredLabels are the tracker labels Ship Claim and Abort transitions need.
+var requiredLabels = []struct {
+	Name        string
+	Description string
+	Color       string
+}{
+	{LabelReadyForAgent, "Eligible for a Ship Run to Claim", "0E8A16"},
+	{LabelInProgress, "A Ship Run is working this Ticket", "FBCA04"},
+}
+
+// EnsureLabels creates Ready for Agent and In Progress when missing.
+func (g *GitHub) EnsureLabels(ctx context.Context) error {
+	execGH := g.exec()
+	out, err := execGH(ctx, "label", "list", "--json", "name", "--limit", "1000")
+	if err != nil {
+		return fmt.Errorf("list labels: %w", err)
+	}
+	var existing []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(out, &existing); err != nil {
+		return fmt.Errorf("parse label list: %w", err)
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, l := range existing {
+		have[l.Name] = struct{}{}
+	}
+	for _, label := range requiredLabels {
+		if _, ok := have[label.Name]; ok {
+			continue
+		}
+		_, err := execGH(ctx, "label", "create", label.Name,
+			"--description", label.Description,
+			"--color", label.Color,
+		)
+		if err != nil {
+			return fmt.Errorf("create label %q: %w", label.Name, err)
+		}
+	}
+	return nil
+}
+
 // Claim moves a Ticket from Ready for Agent to In Progress.
 func (g *GitHub) Claim(ctx context.Context, t Ticket) error {
 	_, err := g.exec()(ctx, "issue", "edit", fmt.Sprintf("%d", t.Number),
