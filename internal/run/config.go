@@ -28,6 +28,8 @@ Phase), then a Final Phase.
 Usage:
   ship [flags]
   ship init
+  ship update
+  ship --version
 
 Flags:
 `)
@@ -36,6 +38,10 @@ Flags:
 	fs.SetOutput(w)
 	fs.PrintDefaults()
 	fmt.Fprintf(w, `
+Commands:
+  init     create .ship/config.yaml with defaults
+  update   download the latest GitHub Release and replace this binary
+
 Config:
   .ship/config.yaml at the checkout root (defaults → YAML → flags).
   Run "ship init" to create one with filled defaults.
