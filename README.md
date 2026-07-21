@@ -1,7 +1,6 @@
 [![CI](https://github.com/maxBRT/ship-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/maxBRT/ship-cli/actions/workflows/ci.yml)
 
 # Ship 🚀
-
 Ship turns labeled GitHub issues into a pull request by driving **your** local coding agent through a fixed sequence of phases.
 
 It is not an agent itself. You bring Cursor Agent, Claude Code, Codex, or pi. Ship queues the tickets, starts a fresh agent for each phase, and opens the PR in whatever checkout you already have.

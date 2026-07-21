@@ -254,7 +254,7 @@ func cleanEnv(extra ...string) []string {
 	return append(out, extra...)
 }
 
-func TestInstallScript_warnsWhenInstallDirNotOnPATH(t *testing.T) {
+func TestInstallScript_errorsWhenInstallDirNotOnPATH(t *testing.T) {
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if !supportedPlatform(goos, goarch) {
 		t.Skip("unsupported GOOS/GOARCH for install script test")
@@ -280,8 +280,8 @@ func TestInstallScript_warnsWhenInstallDirNotOnPATH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install.sh failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "not on PATH") {
-		t.Errorf("expected PATH warning; got:\n%s", out)
+	if !strings.Contains(string(out), "error:") || !strings.Contains(string(out), "not on PATH") {
+		t.Errorf("expected PATH error; got:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(binDir, "ship")); err != nil {
 		t.Fatalf("ship should still be installed: %v", err)

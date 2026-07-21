@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -233,7 +234,10 @@ func (r *Releases) get(ctx context.Context, url, accept string) ([]byte, int, er
 	}
 	resp, err := r.client().Do(req)
 	if err != nil {
-		return nil, 0, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, 0, err
+		}
+		return nil, 0, fmt.Errorf("cannot reach GitHub (connectivity): %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)

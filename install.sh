@@ -157,7 +157,7 @@ main() {
   case ":${PATH}:" in
     *":${DEST}:"*) ;;
     *)
-      printf 'warning: %s is not on PATH; add it so you can run ship\n' "$DEST" >&2
+      printf 'error: %s is not on PATH; add it so you can run ship\n' "$DEST" >&2
       ;;
   esac
 }

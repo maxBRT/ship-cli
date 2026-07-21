@@ -320,6 +320,37 @@ func TestReleases_downloadRateLimitReadable(t *testing.T) {
 	}
 }
 
+func TestReleases_connectivityFailureClearError(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "ship")
+	original := []byte("old-ship")
+	if err := os.WriteFile(exe, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	up := &update.Releases{
+		Owner:      "maxBRT",
+		Repo:       "ship-cli",
+		Version:    "v1.0.0",
+		Executable: exe,
+		APIBase:    "http://127.0.0.1:1", // nothing listening
+		Client:     &http.Client{},
+	}
+	_, err := up.Update(context.Background())
+	if err == nil {
+		t.Fatal("Update error = nil, want connectivity failure")
+	}
+	if !strings.Contains(err.Error(), "connectivity") {
+		t.Errorf("error should mention connectivity; got %v", err)
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("binary changed after connectivity failure; want intact")
+	}
+}
+
 func supportedTestPlatform(goos, goarch string) bool {
 	switch goos {
 	case "linux", "darwin", "windows":
