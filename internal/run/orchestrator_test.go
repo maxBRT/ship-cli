@@ -555,8 +555,8 @@ func TestRun_skipsFinalWhenNoSuccessfulIteration(t *testing.T) {
 	if len(tickets.doneList) != 0 {
 		t.Errorf("done = %v, want none", tickets.doneList)
 	}
-	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
-	if open {
+	url, _ := prs.OpenPRURL(context.Background(), "ship/run")
+	if url != "" {
 		t.Error("no PR should be recorded when Final never runs")
 	}
 }
@@ -596,6 +596,13 @@ func TestRun_finalPhaseRunsAfterQueueDrains(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Queue drained") {
 		t.Errorf("stdout = %q, want drain summary", out.String())
+	}
+	wantPR := "https://example.com/ship/run/pull/1"
+	if !strings.Contains(out.String(), "Run complete. Agents finished and opened a pull request:") {
+		t.Errorf("stdout = %q, want Run complete message", out.String())
+	}
+	if !strings.Contains(out.String(), wantPR) {
+		t.Errorf("stdout = %q, want linked pull request %q", out.String(), wantPR)
 	}
 }
 
@@ -665,8 +672,8 @@ func TestRun_finalPhaseFailureAbortsRun(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{7}) {
 		t.Errorf("done = %v, want [7]", got)
 	}
-	open, _ := prs.HasOpenPR(context.Background(), "ship/run")
-	if open {
+	url, _ := prs.OpenPRURL(context.Background(), "ship/run")
+	if url != "" {
 		t.Error("no PR should be recorded when Final Agent fails")
 	}
 }
@@ -709,6 +716,9 @@ func TestRun_stopsAtMaxIterationsWithPartialProgress(t *testing.T) {
 	}
 	if !strings.Contains(finalPrompt, "2") {
 		t.Errorf("Final prompt must include max iterations (2):\n%s", finalPrompt)
+	}
+	if !strings.Contains(out.String(), "https://example.com/ship/run/pull/1") {
+		t.Errorf("stdout = %q, want linked pull request after Partial Progress Final", out.String())
 	}
 }
 
@@ -1399,23 +1409,24 @@ func (f *fakeTickets) Done(_ context.Context, t ticket.Ticket) error {
 }
 
 // fakePRs reports which branches have an open pull request. Final success
-// requires HasOpenPR to return true for the Run branch after the Agent exits.
+// requires OpenPRURL to return a non-empty URL for the Run branch after the
+// Agent exits.
 type fakePRs struct {
-	open map[string]bool
+	urls map[string]string
 }
 
-func (f *fakePRs) HasOpenPR(_ context.Context, branch string) (bool, error) {
-	if f.open == nil {
-		return false, nil
+func (f *fakePRs) OpenPRURL(_ context.Context, branch string) (string, error) {
+	if f.urls == nil {
+		return "", nil
 	}
-	return f.open[branch], nil
+	return f.urls[branch], nil
 }
 
 func (f *fakePRs) openPR(branch string) {
-	if f.open == nil {
-		f.open = map[string]bool{}
+	if f.urls == nil {
+		f.urls = map[string]string{}
 	}
-	f.open[branch] = true
+	f.urls[branch] = "https://example.com/" + branch + "/pull/1"
 }
 
 // fakeAgent records Phase requests and defers behavior to handler. The 1-based

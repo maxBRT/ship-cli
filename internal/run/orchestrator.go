@@ -36,7 +36,9 @@ type Orchestrator struct {
 // PullRequests is the side-effect seam Final success is checked against: an
 // open pull request for the Run branch after the Final Agent exits 0.
 type PullRequests interface {
-	HasOpenPR(ctx context.Context, branch string) (bool, error)
+	// OpenPRURL returns the URL of an open pull request for branch, or "" if
+	// none exists.
+	OpenPRURL(ctx context.Context, branch string) (string, error)
 }
 
 // Run executes one Ship Run in the current checkout.
@@ -180,13 +182,14 @@ func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ti
 	if err := r.runPhase(ctx, throbber.Status{Phase: "Final"}, finalPrompt); err != nil {
 		return fmt.Errorf("Abort: Final Phase: %w", err)
 	}
-	open, err := r.PRs.HasOpenPR(ctx, branch)
+	prURL, err := r.PRs.OpenPRURL(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("Abort: check Final pull request for %s: %w", branch, err)
 	}
-	if !open {
+	if prURL == "" {
 		return fmt.Errorf("Abort: Final Phase produced no open pull request for branch %s", branch)
 	}
+	fmt.Fprintf(r.stdout(), "Run complete. Agents finished and opened a pull request:\n%s\n", prURL)
 	return nil
 }
 
