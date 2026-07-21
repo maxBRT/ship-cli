@@ -92,14 +92,36 @@ func TestNew_codexReturnsPortUsingCodexOnPATH(t *testing.T) {
 	assertHasFlag(t, args, "--json")
 }
 
-func TestNew_unimplementedKindErrors(t *testing.T) {
-	_, err := agent.New("claude")
-	if err == nil {
-		t.Fatal("New(claude): want error until adapter lands")
+func TestNew_claudeReturnsPortUsingClaudeOnPATH(t *testing.T) {
+	bin, capture := writeFakeAgent(t, fakeAgentConfig{
+		exitCode: 0,
+		stdout:   `{"type":"result","subtype":"success"}` + "\n",
+	})
+	claudeBin := filepath.Join(filepath.Dir(bin), "claude")
+	if err := os.Rename(bin, claudeBin); err != nil {
+		t.Fatalf("rename fake to claude: %v", err)
 	}
-	if !strings.Contains(err.Error(), "claude") {
-		t.Errorf("error should name kind; got %v", err)
+	t.Setenv("PATH", filepath.Dir(claudeBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	port, err := agent.New("claude")
+	if err != nil {
+		t.Fatalf("New(claude): %v", err)
 	}
+
+	err = port.RunPhase(context.Background(), agent.PhaseRequest{
+		Prompt:    "implement",
+		Workspace: t.TempDir(),
+		Timeout:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	args := capture.args(t)
+	assertHasFlag(t, args, "-p")
+	assertHasFlag(t, args, "--dangerously-skip-permissions")
+	assertHasFlag(t, args, "--no-session-persistence")
+	assertHasFlagValue(t, args, "--output-format", "stream-json")
+	assertHasFlag(t, args, "--verbose")
 }
 
 func TestNew_unknownKindErrors(t *testing.T) {
@@ -144,6 +166,19 @@ func TestRequireOnPATH_failsWhenCodexBinaryMissing(t *testing.T) {
 		t.Fatal("RequireOnPATH(codex): want error when codex missing")
 	}
 	if !strings.Contains(err.Error(), "codex") {
+		t.Errorf("error should mention default binary; got %v", err)
+	}
+}
+
+func TestRequireOnPATH_failsWhenClaudeBinaryMissing(t *testing.T) {
+	empty := t.TempDir()
+	t.Setenv("PATH", empty)
+
+	err := agent.RequireOnPATH("claude")
+	if err == nil {
+		t.Fatal("RequireOnPATH(claude): want error when claude missing")
+	}
+	if !strings.Contains(err.Error(), "claude") {
 		t.Errorf("error should mention default binary; got %v", err)
 	}
 }
