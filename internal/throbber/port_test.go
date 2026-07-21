@@ -11,6 +11,21 @@ import (
 	"github.com/maxBRT/ship-cli/internal/throbber"
 )
 
+func TestStatus_Label_joinsPresentFields(t *testing.T) {
+	got := throbber.Status{Phase: "Review", Iteration: 2, Ticket: "#50 Pi Agent adapter"}.Label()
+	want := "Iteration 2 · Review · #50 Pi Agent adapter"
+	if got != want {
+		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+func TestStatus_Label_omitsEmptyFields(t *testing.T) {
+	got := throbber.Status{Phase: "Final"}.Label()
+	if got != "Final" {
+		t.Errorf("Label() = %q, want %q", got, "Final")
+	}
+}
+
 func TestSilent_During_runsWorkAndReturnsItsError(t *testing.T) {
 	want := errors.New("phase failed")
 	called := false

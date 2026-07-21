@@ -7,6 +7,7 @@ import (
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/herdr"
 	"github.com/maxBRT/ship-cli/internal/observe"
 	"github.com/maxBRT/ship-cli/internal/prompt"
 	"github.com/maxBRT/ship-cli/internal/throbber"
@@ -28,6 +29,7 @@ type Orchestrator struct {
 	Config   Config
 	Throbber throbber.Port  // optional; nil means no wait UI
 	Observer observe.Port   // optional; nil means no Phase observability
+	Herdr    herdr.Port     // optional; nil means no multiplexer agent-state reports
 	Stdout   io.Writer
 }
 
@@ -192,6 +194,10 @@ func (r Orchestrator) runPhase(ctx context.Context, status throbber.Status, prom
 	var events observe.Sink
 	if r.Observer != nil {
 		events = r.Observer.BeginPhase(status.Phase)
+	}
+	if r.Herdr != nil {
+		r.Herdr.Working(ctx, status.Label())
+		defer r.Herdr.Idle(ctx)
 	}
 	work := func(ctx context.Context) error {
 		return r.Agent.RunPhase(ctx, agent.PhaseRequest{
