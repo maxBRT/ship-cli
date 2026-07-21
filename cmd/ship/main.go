@@ -15,6 +15,7 @@ import (
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
+	"github.com/maxBRT/ship-cli/internal/version"
 )
 
 func main() {
@@ -26,6 +27,10 @@ func main() {
 func Main(args []string, stdout, stderr io.Writer, dir string) int {
 	if len(args) > 0 && args[0] == "init" {
 		return runInit(stderr, dir)
+	}
+	if wantsVersion(args) {
+		fmt.Fprintln(stdout, version.Version)
+		return 0
 	}
 	if wantsHelp(args) {
 		run.WriteUsage(stdout)
@@ -88,6 +93,15 @@ func runInit(stderr io.Writer, dir string) int {
 func wantsHelp(args []string) bool {
 	for _, a := range args {
 		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func wantsVersion(args []string) bool {
+	for _, a := range args {
+		if a == "-version" || a == "--version" {
 			return true
 		}
 	}

@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestMain_versionPrintsEmbeddedVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"--version"}, &stdout, &stderr, t.TempDir())
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("want empty stderr, got %q", stderr.String())
+	}
+	// Non-release builds report the known default "dev".
+	got := strings.TrimSpace(stdout.String())
+	if got != "dev" {
+		t.Errorf("version = %q, want %q", got, "dev")
+	}
+}
+
 func TestMain_helpDocumentsDomainLanguage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"--help"}, &stdout, &stderr, t.TempDir())
