@@ -18,8 +18,8 @@ type Port interface {
 	// BeginPhase starts buffering for one Phase and returns the Sink Agent
 	// adapters emit into. Mid-Phase Emit must not write tool lines to Out.
 	BeginPhase(phase string) Sink
-	// EndPhase dumps high-signal one-liners for tools and token totals
-	// collected since BeginPhase, then clears the buffer.
+	// EndPhase dumps one high-signal line with the tool total and token
+	// totals collected since BeginPhase, then clears the buffer.
 	EndPhase()
 	// Abort prints a stderr banner with the Run report directory, Phase log
 	// path, and last tool lines, then clears the buffer. Used on Phase
@@ -28,7 +28,7 @@ type Port interface {
 	Abort()
 }
 
-// Observer buffers curated events for a Phase and dumps one-liners to Out
+// Observer buffers curated events for a Phase and dumps a summary line to Out
 // when EndPhase is called. Safe for concurrent Emit from an Agent adapter.
 // Dir is the workspace root; Phase reports land under Dir/.ship/runs/<run-id>/.
 type Observer struct {
@@ -96,26 +96,35 @@ func (o *Observer) Emit(e Event) {
 	_ = enc.Encode(e)
 }
 
-// EndPhase writes high-signal one-liners for buffered tools (and later tokens)
-// then clears the buffer.
+// EndPhase writes one high-signal line with the tool total and any token
+// totals, then clears the buffer. Per-tool detail stays in the Phase log.
 func (o *Observer) EndPhase() {
 	o.mu.Lock()
 	events := o.events
 	o.events = nil
 	o.mu.Unlock()
 
+	var tools int
+	var tokens *TokenCounts
 	for _, e := range events {
 		switch e.Kind {
 		case KindTool:
-			fmt.Fprintf(o.Out, "tool  %s  %dms  %s\n", e.Name, e.DurationMS, e.Status)
+			tools++
 		case KindPhaseEnd:
-			if e.Tokens == nil {
-				continue
+			if e.Tokens != nil {
+				tokens = e.Tokens
 			}
-			fmt.Fprintf(o.Out, "tokens  input=%d output=%d cache_read=%d cache_write=%d\n",
-				e.Tokens.Input, e.Tokens.Output, e.Tokens.CacheRead, e.Tokens.CacheWrite)
 		}
 	}
+	if tools == 0 && tokens == nil {
+		return
+	}
+	if tokens == nil {
+		fmt.Fprintf(o.Out, "tools  %d\n", tools)
+		return
+	}
+	fmt.Fprintf(o.Out, "tools  %d  tokens  input=%d output=%d cache_read=%d cache_write=%d\n",
+		tools, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite)
 }
 
 // Abort writes a banner with Run report and Phase log paths plus the last

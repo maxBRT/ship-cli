@@ -90,14 +90,13 @@ func TestRun_afterPhase_dumpsHighSignalToolAndTokenLines(t *testing.T) {
 	}
 
 	got := dump.String()
-	// Three Phases each dump the same worked-example lines.
-	wantTool := "tool  Read  42ms  ok"
-	wantTokens := "tokens  input=120 output=45 cache_read=10 cache_write=2"
-	if c := strings.Count(got, wantTool); c != 3 {
-		t.Errorf("tool dump lines = %d, want 3; got:\n%s", c, got)
+	// Three Phases each dump one high-signal tools+tokens line.
+	want := "tools  1  tokens  input=120 output=45 cache_read=10 cache_write=2"
+	if c := strings.Count(got, want); c != 3 {
+		t.Errorf("phase dump lines = %d, want 3; got:\n%s", c, got)
 	}
-	if c := strings.Count(got, wantTokens); c != 3 {
-		t.Errorf("token dump lines = %d, want 3; got:\n%s", c, got)
+	if strings.Contains(got, "tool  Read") {
+		t.Errorf("dump must not list per-tool lines; got:\n%s", got)
 	}
 }
 
