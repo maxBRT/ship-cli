@@ -15,6 +15,8 @@ import (
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
 	"github.com/maxBRT/ship-cli/internal/ticket"
+	"github.com/maxBRT/ship-cli/internal/update"
+	"github.com/maxBRT/ship-cli/internal/version"
 )
 
 func main() {
@@ -24,8 +26,21 @@ func main() {
 // Main is the testable CLI entrypoint. It parses Run configuration and drives
 // the Run orchestrator over the checkout in dir.
 func Main(args []string, stdout, stderr io.Writer, dir string) int {
+	return MainWith(args, stdout, stderr, dir, nil)
+}
+
+// MainWith is Main with an optional Updater. Nil uses the real GitHub Releases
+// adapter for ship update.
+func MainWith(args []string, stdout, stderr io.Writer, dir string, up update.Port) int {
 	if len(args) > 0 && args[0] == "init" {
 		return runInit(stderr, dir)
+	}
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(stdout, stderr, up)
+	}
+	if wantsVersion(args) {
+		fmt.Fprintln(stdout, version.Version)
+		return 0
 	}
 	if wantsHelp(args) {
 		run.WriteUsage(stdout)
@@ -82,6 +97,28 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 	return 0
 }
 
+func runUpdate(stdout, stderr io.Writer, up update.Port) int {
+	if up == nil {
+		var err error
+		up, err = update.Default()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	res, err := up.Update(context.Background())
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if res.AlreadyCurrent {
+		fmt.Fprintf(stdout, "ship is up to date (%s)\n", res.OldVersion)
+		return 0
+	}
+	fmt.Fprintf(stdout, "updated ship %s → %s\n", res.OldVersion, res.NewVersion)
+	return 0
+}
+
 func runInit(stderr io.Writer, dir string) int {
 	created, err := (run.Init{Out: stderr}).Config(dir)
 	if err != nil {
@@ -99,6 +136,15 @@ func runInit(stderr io.Writer, dir string) int {
 func wantsHelp(args []string) bool {
 	for _, a := range args {
 		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func wantsVersion(args []string) bool {
+	for _, a := range args {
+		if a == "-version" || a == "--version" {
 			return true
 		}
 	}

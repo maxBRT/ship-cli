@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+builds:
+  - id: ship
+    main: ./cmd/ship
+    binary: ship
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/maxBRT/ship-cli/internal/version.Version={{.Version}}
+
+# Archives and checksums use GoReleaser defaults (name includes version/os/arch;
+# checksums file is {{ .ProjectName }}_{{ .Version }}_checksums.txt).
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

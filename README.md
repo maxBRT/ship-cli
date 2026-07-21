@@ -4,24 +4,21 @@ CLI that runs a sequential Ticket Run in your existing git checkout: confirm a s
 
 **Status:** v0.0.1 (experimental).
 
-## User guide
-
-Open **[guide.html](guide.html)** in a browser for install, update, how a Run works, examples, flags, and troubleshooting.
+## Install
 
 ```bash
-xdg-open guide.html   # or open guide.html from a file manager
+curl -fsSL https://raw.githubusercontent.com/maxBRT/ship-cli/main/install.sh | bash
 ```
 
-## Quick install (today)
+The script detects linux/darwin × amd64/arm64, downloads the latest GitHub Release, verifies checksums, and installs `ship` to `~/.local/bin` (or a writable system bin). Windows release assets are on the same [Releases](https://github.com/maxBRT/ship-cli/releases) page for manual download.
+
+## Update
 
 ```bash
-git clone git@github.com:maxBRT/ship-cli.git
-cd ship-cli
-go build -o ~/.local/bin/ship ./cmd/ship
-ship --help
+ship update
 ```
 
-Or: `go install github.com/maxBRT/ship-cli/cmd/ship@latest`
+Downloads the latest GitHub Release, verifies checksums, and replaces the running binary in place. Check what you have with `ship --version`.
 
 ## Prerequisites
 
@@ -37,4 +34,18 @@ gh issue edit <n> --add-label "ship"
 ship
 ```
 
-See [guide.html](guide.html) for flags, env vars, and more examples. Domain language: [CONTEXT.md](CONTEXT.md).
+Domain language: [CONTEXT.md](CONTEXT.md). Run `ship --help` for flags and commands.
+
+## Install from source (Go developers)
+
+```bash
+go install github.com/maxBRT/ship-cli/cmd/ship@latest
+```
+
+Or clone and build locally:
+
+```bash
+git clone git@github.com:maxBRT/ship-cli.git
+cd ship-cli
+go build -o ~/.local/bin/ship ./cmd/ship
+```
