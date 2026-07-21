@@ -81,16 +81,29 @@ One-off overrides:
 ```bash
 ship --agent pi --model gpt-5 --max-iterations 3 --branch ship/my-feature --timeout 30m
 ```
+
+Per-checkout settings live in `.ship/config.yaml`. Create one with `ship init`, or let the first `ship` run write defaults.
+
+Precedence: built-in defaults → YAML → flags (flags win for that invocation).
+
 Useful flags:
 
-```bash
-ship --agent cursor          # cursor | pi | codex | claude (default: cursor)
-ship --model <name>          # optional model for that agent
-ship --max-iterations 5      # cap tickets this run before Final
-ship --branch ship/my-feature
+```yaml
+branch: ""            # empty → generate ship/<id>
+feature: ""           # optional extra label filter on ship Tickets
+agent: cursor         # cursor | pi | codex | claude
+model: ""             # optional model for the Agent
+max_iterations: 10    # max tickets (Implement+Review) before Final
+timeout: 20m          # per-Phase timeout (Go duration)
 ```
 
-Run `ship --help` for all flags, env vars, and commands (`init`, `update`, `--version`).
+One-off overrides:
+
+```bash
+ship --agent pi --model gpt-5 --max-iterations 3 --branch ship/my-feature --timeout 30m
+```
+
+Run `ship --help` for flags and commands (`init`, `update`, `--version`).
 
 ## Install from source
 
