@@ -241,31 +241,32 @@ func TestDone_removesShipAndClosesIssue(t *testing.T) {
 	}
 }
 
-func TestHasOpenPR_trueWhenOpenPRExistsForBranch(t *testing.T) {
+func TestOpenPRURL_returnsURLWhenOpenPRExistsForBranch(t *testing.T) {
 	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
-		"pr list --head ship/run --state open --json number": `[{"number":42}]`,
+		"pr list --head ship/run --state open --json url": `[{"url":"https://github.com/acme/ship/pull/42"}]`,
 	})}
 
-	open, err := gh.HasOpenPR(context.Background(), "ship/run")
+	got, err := gh.OpenPRURL(context.Background(), "ship/run")
 	if err != nil {
-		t.Fatalf("HasOpenPR: %v", err)
+		t.Fatalf("OpenPRURL: %v", err)
 	}
-	if !open {
-		t.Fatal("HasOpenPR = false, want true when an open PR exists")
+	want := "https://github.com/acme/ship/pull/42"
+	if got != want {
+		t.Fatalf("OpenPRURL = %q, want %q", got, want)
 	}
 }
 
-func TestHasOpenPR_falseWhenNone(t *testing.T) {
+func TestOpenPRURL_emptyWhenNone(t *testing.T) {
 	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
-		"pr list --head ship/run --state open --json number": `[]`,
+		"pr list --head ship/run --state open --json url": `[]`,
 	})}
 
-	open, err := gh.HasOpenPR(context.Background(), "ship/run")
+	got, err := gh.OpenPRURL(context.Background(), "ship/run")
 	if err != nil {
-		t.Fatalf("HasOpenPR: %v", err)
+		t.Fatalf("OpenPRURL: %v", err)
 	}
-	if open {
-		t.Fatal("HasOpenPR = true, want false when no open PR")
+	if got != "" {
+		t.Fatalf("OpenPRURL = %q, want empty when no open PR", got)
 	}
 }
 
