@@ -9,7 +9,7 @@ The CLI product that orchestrates ticket work in a local checkout.
 _Avoid_: ship-cli (except as the repo/binary name), ralph, loop tool
 
 **Run**:
-One invocation of ship: confirm a ship queue from Ready for Agent tickets, process that frozen set in sequence, then (when applicable) finish with a final review and pull request.
+One invocation of ship: confirm a ship queue from ship-labeled tickets, process that frozen set in sequence, then (when applicable) finish with a final review and pull request.
 _Avoid_: session, job, voyage, loop (as a noun for the whole invocation)
 
 **Ticket**:
@@ -17,11 +17,11 @@ A unit of work a run may process through an Iteration until it is Done. Today ea
 _Avoid_: Issue, task, item
 
 **Ready for Agent**:
-Ticket state meaning the ticket is eligible to appear as a run queue candidate.
+Ticket triage state meaning the ticket is fully specified for an AFK agent. Ship does not gather the run queue from this label.
 _Avoid_: ready, open, backlog, todo
 
 **ship (label)**:
-Tracker label meaning the ticket is a member of a run's remaining confirmed queue. Stamped when the queue is confirmed; cleared when the ticket is Done. Unfinished tickets keep it after Abort or Partial Progress.
+Tracker label meaning the ticket is eligible to appear as a run queue candidate, and remains a member of a run's remaining confirmed queue until Done. Cleared when the ticket is Done. Unfinished tickets keep it after Abort or Partial Progress.
 _Avoid_: in-progress, claimed, lock (as the run membership model)
 
 **Done**:
@@ -29,7 +29,7 @@ Ticket state meaning the ticket's work for this run is finished and it should no
 _Avoid_: closed (as the domain name), complete, finished, resolved
 
 **Queue confirmation**:
-The act of selecting the ordered ticket set a run will process via an interactive picker over Ready for Agent candidates (fakeable in tests) and stamping that set with ship.
+The act of selecting the ordered ticket set a run will process via an interactive picker over ship-labeled candidates (fakeable in tests) and stamping that set with ship.
 _Avoid_: Claim, pickup, lock, assign (unless talking about GitHub assignee specifically)
 
 **Iteration**:

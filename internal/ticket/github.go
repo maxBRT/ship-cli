@@ -41,7 +41,7 @@ func defaultExec(ctx context.Context, args ...string) ([]byte, error) {
 const listReadyQuery = `
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    issues(first: 100, states: OPEN, labels: ["ready-for-agent"], orderBy: {field: CREATED_AT, direction: ASC}) {
+    issues(first: 100, states: OPEN, labels: ["ship"], orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes {
         number
         title
@@ -82,7 +82,7 @@ type orderedTicket struct {
 	createdAt time.Time
 }
 
-// ListReady returns Ready for Agent Tickets in stable default order:
+// ListReady returns ship-labeled Tickets in stable default order:
 // ascending issue number, then oldest created date.
 func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error) {
 	execGH := g.exec()
@@ -123,7 +123,6 @@ func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error
 			Ticket: Ticket{
 				Number: issue.Number,
 				Title:  issue.Title,
-				OnShip: hasLabel(issue, LabelShip),
 			},
 			createdAt: issue.CreatedAt,
 		})
@@ -152,15 +151,15 @@ func hasLabel(issue gqlIssue, want string) bool {
 	return false
 }
 
-// requiredLabels are the tracker labels Ship needs for Ready for Agent triage
-// and ship queue membership.
+// requiredLabels are the tracker labels Ship needs for triage and ship queue
+// membership (candidates for the Run picker).
 var requiredLabels = []struct {
 	Name        string
 	Description string
 	Color       string
 }{
-	{LabelReadyForAgent, "Eligible for a Ship Run queue", "0E8A16"},
-	{LabelShip, "Remaining queue membership for a Ship Run", "9ADD98"},
+	{LabelReadyForAgent, "Fully specified, ready for an AFK agent", "0E8A16"},
+	{LabelShip, "Eligible for a Ship Run queue", "9ADD98"},
 }
 
 // EnsureLabels creates Ready for Agent and ship when missing.

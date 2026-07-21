@@ -14,7 +14,7 @@ import (
 )
 
 // Orchestrator wires the Ship Run loop over its ports: it confirms a ship
-// queue from Ready for Agent candidates, stamps that set, drives an Implement
+// queue from ship-labeled candidates, stamps that set, drives an Implement
 // then a Review Phase per Iteration, marks each Ticket Done, then runs Final
 // and verifies an open pull request. Phase failure Aborts (undo commits,
 // stop) while leaving ship on unfinished Tickets. Ports stay behind interfaces
@@ -40,7 +40,7 @@ type PullRequests interface {
 // Run executes one Ship Run in the current checkout.
 //
 // It first ensures the Ready for Agent and ship tracker labels exist. With no
-// Ready for Agent Tickets it reports that and returns without touching the
+// ship-labeled Tickets it reports that and returns without touching the
 // branch. Otherwise it opens the queue picker (Interactive in production;
 // injectable in tests), stamps ship on the confirmed ordered set, prepares
 // the Run branch, then walks that frozen queue one Iteration each (Implement
@@ -56,10 +56,10 @@ func (r Orchestrator) Run(ctx context.Context) error {
 
 	ready, err := r.Tickets.ListReady(ctx, r.Config.Feature)
 	if err != nil {
-		return fmt.Errorf("list Ready for Agent Tickets: %w", err)
+		return fmt.Errorf("list ship Tickets: %w", err)
 	}
 	if len(ready) == 0 {
-		fmt.Fprintln(r.stdout(), "No Ready for Agent Tickets; nothing to Run.")
+		fmt.Fprintln(r.stdout(), "No ship Tickets; nothing to Run.")
 		return nil
 	}
 
@@ -160,7 +160,7 @@ func (r Orchestrator) queue() Queue {
 // in the prompt when the Run stopped at max iterations with work remaining.
 func (r Orchestrator) final(ctx context.Context, branch string, done []ticket.Ticket, partial bool) error {
 	if partial {
-		fmt.Fprintf(r.stdout(), "Stopped at max iterations (%d) with Ready for Agent Tickets remaining; %d Ticket(s) Done.\n", r.Config.MaxIterations, len(done))
+		fmt.Fprintf(r.stdout(), "Stopped at max iterations (%d) with ship Tickets remaining; %d Ticket(s) Done.\n", r.Config.MaxIterations, len(done))
 	} else {
 		fmt.Fprintf(r.stdout(), "Queue drained; %d Ticket(s) Done.\n", len(done))
 	}

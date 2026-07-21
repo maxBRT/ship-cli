@@ -21,7 +21,7 @@ type Config struct {
 func WriteUsage(w io.Writer) {
 	fmt.Fprintf(w, `ship - run a sequential Ticket Run in the current checkout.
 
-A Run confirms a ship queue from Ready for Agent Tickets via an interactive
+A Run confirms a ship queue from ship-labeled Tickets via an interactive
 picker, processes each through one Iteration (Implement Phase then Review
 Phase), then a Final Phase.
 
@@ -53,7 +53,7 @@ func defaultConfig() Config {
 func newFlagSet(cfg *Config) *flag.FlagSet {
 	fs := flag.NewFlagSet("ship", flag.ContinueOnError)
 	fs.StringVar(&cfg.Branch, "branch", cfg.Branch, "git branch for the Run (empty means generate ship/<id>)")
-	fs.StringVar(&cfg.Feature, "feature", cfg.Feature, "optional Ready for Agent filter label for Tickets")
+	fs.StringVar(&cfg.Feature, "feature", cfg.Feature, "optional extra filter label for ship Tickets")
 	fs.StringVar(&cfg.Agent, "agent", cfg.Agent, "Agent binary used for every Phase")
 	fs.StringVar(&cfg.Model, "model", cfg.Model, "optional model for the Agent")
 	fs.IntVar(&cfg.MaxIterations, "max-iterations", cfg.MaxIterations, "max Iterations (one Ticket each) before Final")
