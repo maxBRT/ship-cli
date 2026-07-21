@@ -1,30 +1,28 @@
-# ship
+# Ship 🚀
 
-CLI that runs a sequential Ticket Run in your existing git checkout: confirm a ship queue from ship-labeled GitHub issues, drive Cursor’s `agent` through Implement → Review → Final, and open a pull request.
+A CLI that runs agents sequentially.
+
+Confirm a queue from ship-labeled GitHub issues, then spin agents through an Implement → Review loop for each of the tickets and open a pull request.
 
 **Status:** v0.0.1 (experimental).
 
 ## Install
 
+#### Linux/MacOS
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxBRT/ship-cli/main/install.sh | bash
 ```
 
-The script detects linux/darwin × amd64/arm64, downloads the latest GitHub Release, verifies checksums, and installs `ship` to `~/.local/bin` (or a writable system bin). Windows release assets are on the same [Releases](https://github.com/maxBRT/ship-cli/releases) page for manual download.
+#### Windows
 
-## Update
+[Releases](https://github.com/maxBRT/ship-cli/releases) page for manual download.
 
-```bash
-ship update
-```
-
-Downloads the latest GitHub Release, verifies checksums, and replaces the running binary in place. Check what you have with `ship --version`.
 
 ## Prerequisites
 
-- Git checkout (Ship does not create worktrees)
 - Authenticated [`gh`](https://cli.github.com/)
-- [Cursor Agent CLI](https://cursor.com/docs/cli/installation) (`agent` on `PATH`)
+- Any of `cursor`, `codex`, `claude caude`, `pi` CLI installed
 
 ## Quickstart
 
@@ -34,9 +32,9 @@ gh issue edit <n> --add-label "ship"
 ship
 ```
 
-Domain language: [CONTEXT.md](CONTEXT.md). Run `ship --help` for flags and commands.
+Run `ship --help` for flags and commands.
 
-## Install from source (Go developers)
+## Install from source
 
 ```bash
 go install github.com/maxBRT/ship-cli/cmd/ship@latest
