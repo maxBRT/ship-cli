@@ -149,7 +149,6 @@ func TestMain_helpDocumentsDomainLanguage(t *testing.T) {
 func TestMain_invalidFlagExitsNonZero(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: cursor
 model: ""
 max_iterations: 10
@@ -168,7 +167,6 @@ timeout: 20m
 func TestMain_invalidTimeoutExitsNonZero(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: cursor
 model: ""
 max_iterations: 10
@@ -187,7 +185,6 @@ timeout: 20m
 func TestMain_missingAgentBinaryExitsBeforeRun(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: cursor
 model: ""
 max_iterations: 10

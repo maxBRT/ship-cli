@@ -22,7 +22,6 @@ func writeShipYAML(t *testing.T, dir, content string) {
 }
 
 const fullYAML = `branch: ""
-feature: ""
 agent: cursor
 model: ""
 max_iterations: 10
@@ -41,9 +40,6 @@ func TestParseConfig_yamlDefaults(t *testing.T) {
 	if cfg.Branch != "" {
 		t.Errorf("Branch = %q, want empty", cfg.Branch)
 	}
-	if cfg.Feature != "" {
-		t.Errorf("Feature = %q, want empty", cfg.Feature)
-	}
 	if cfg.Agent != "cursor" {
 		t.Errorf("Agent = %q, want %q", cfg.Agent, "cursor")
 	}
@@ -61,7 +57,6 @@ func TestParseConfig_yamlDefaults(t *testing.T) {
 func TestParseConfig_yamlOverridesBuiltInDefaults(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: feat/widget
-feature: widget
 agent: pi
 model: composer
 max_iterations: 3
@@ -75,9 +70,6 @@ timeout: 5m
 
 	if cfg.Branch != "feat/widget" {
 		t.Errorf("Branch = %q, want feat/widget", cfg.Branch)
-	}
-	if cfg.Feature != "widget" {
-		t.Errorf("Feature = %q, want widget", cfg.Feature)
 	}
 	if cfg.Agent != "pi" {
 		t.Errorf("Agent = %q, want pi", cfg.Agent)
@@ -96,7 +88,6 @@ timeout: 5m
 func TestParseConfig_flagsOverrideYAML(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: from-yaml
-feature: yaml-feature
 agent: cursor
 model: yaml-model
 max_iterations: 7
@@ -104,7 +95,6 @@ timeout: 2m
 `)
 	args := []string{
 		"--branch", "from-flag",
-		"--feature", "flag-feature",
 		"--agent", "claude",
 		"--model", "flag-model",
 		"--max-iterations", "4",
@@ -117,9 +107,6 @@ timeout: 2m
 
 	if cfg.Branch != "from-flag" {
 		t.Errorf("Branch = %q, want from-flag", cfg.Branch)
-	}
-	if cfg.Feature != "flag-feature" {
-		t.Errorf("Feature = %q, want flag-feature", cfg.Feature)
 	}
 	if cfg.Agent != "claude" {
 		t.Errorf("Agent = %q, want claude", cfg.Agent)
@@ -138,7 +125,6 @@ timeout: 2m
 func TestParseConfig_rejectsUnknownAgentKind(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: opencode
 model: ""
 max_iterations: 10
@@ -157,7 +143,6 @@ timeout: 20m
 func TestParseConfig_rejectsLegacyBinaryAgentWithMigrationHint(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: agent
 model: ""
 max_iterations: 10
@@ -177,7 +162,6 @@ timeout: 20m
 func TestParseConfig_rejectsAbsolutePathAgentWithMigrationHint(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: ""
-feature: ""
 agent: /usr/local/bin/agent
 model: ""
 max_iterations: 10

@@ -50,12 +50,11 @@ func (i Init) Config(dir string) (created bool, err error) {
 			cfg.Agent = kind
 		}
 		content := fmt.Sprintf(`branch: %q
-feature: %q
 agent: %s
 model: %q
 max_iterations: %d
 timeout: %s
-`, cfg.Branch, cfg.Feature, cfg.Agent, cfg.Model, cfg.MaxIterations, formatDuration(cfg.Timeout))
+`, cfg.Branch, cfg.Agent, cfg.Model, cfg.MaxIterations, formatDuration(cfg.Timeout))
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return false, err
 		}
@@ -139,7 +138,6 @@ func LoadConfig(dir string) (Config, error) {
 
 	return Config{
 		Branch:        *raw.Branch,
-		Feature:       *raw.Feature,
 		Agent:         *raw.Agent,
 		Model:         *raw.Model,
 		MaxIterations: *raw.MaxIterations,
@@ -149,7 +147,6 @@ func LoadConfig(dir string) (Config, error) {
 
 type shipYAML struct {
 	Branch        *string `yaml:"branch"`
-	Feature       *string `yaml:"feature"`
 	Agent         *string `yaml:"agent"`
 	Model         *string `yaml:"model"`
 	MaxIterations *int    `yaml:"max_iterations"`
@@ -160,9 +157,6 @@ func (s shipYAML) missingKeys() []string {
 	var missing []string
 	if s.Branch == nil {
 		missing = append(missing, "branch")
-	}
-	if s.Feature == nil {
-		missing = append(missing, "feature")
 	}
 	if s.Agent == nil {
 		missing = append(missing, "agent")

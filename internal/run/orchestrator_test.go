@@ -1379,7 +1379,7 @@ func (f *fakeTickets) EnsureLabels(context.Context) error {
 	return f.ensureErr
 }
 
-func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error) {
+func (f *fakeTickets) ListReady(context.Context) ([]ticket.Ticket, error) {
 	out := make([]ticket.Ticket, len(f.ready))
 	copy(out, f.ready)
 	return out, nil

@@ -46,7 +46,6 @@ query($owner: String!, $name: String!) {
         number
         title
         createdAt
-        labels(first: 20) { nodes { name } }
       }
     }
   }
@@ -70,11 +69,6 @@ type gqlIssue struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"createdAt"`
-	Labels    struct {
-		Nodes []struct {
-			Name string `json:"name"`
-		} `json:"nodes"`
-	} `json:"labels"`
 }
 
 type orderedTicket struct {
@@ -84,7 +78,7 @@ type orderedTicket struct {
 
 // ListReady returns ship-labeled Tickets in stable default order:
 // ascending issue number, then oldest created date.
-func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error) {
+func (g *GitHub) ListReady(ctx context.Context) ([]Ticket, error) {
 	execGH := g.exec()
 
 	repoOut, err := execGH(ctx, "repo", "view", "--json", "nameWithOwner")
@@ -116,9 +110,6 @@ func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error
 
 	ordered := make([]orderedTicket, 0, len(resp.Data.Repository.Issues.Nodes))
 	for _, issue := range resp.Data.Repository.Issues.Nodes {
-		if feature != "" && !hasLabel(issue, feature) {
-			continue
-		}
 		ordered = append(ordered, orderedTicket{
 			Ticket: Ticket{
 				Number: issue.Number,
@@ -140,15 +131,6 @@ func (g *GitHub) ListReady(ctx context.Context, feature string) ([]Ticket, error
 		outTickets[i] = r.Ticket
 	}
 	return outTickets, nil
-}
-
-func hasLabel(issue gqlIssue, want string) bool {
-	for _, l := range issue.Labels.Nodes {
-		if l.Name == want {
-			return true
-		}
-	}
-	return false
 }
 
 // requiredLabels are the tracker labels Ship needs for triage and ship queue

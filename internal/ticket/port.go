@@ -22,9 +22,9 @@ type Port interface {
 	// missing from the tracker, so queue stamping and Done can succeed.
 	EnsureLabels(ctx context.Context) error
 
-	// ListReady returns Tickets labeled ship, optionally also matching
-	// feature, in stable default order (issue number / created date).
-	ListReady(ctx context.Context, feature string) ([]Ticket, error)
+	// ListReady returns Tickets labeled ship in stable default order
+	// (issue number / created date).
+	ListReady(ctx context.Context) ([]Ticket, error)
 
 	// Stamp adds the ship label to the confirmed queue without removing
 	// Ready for Agent.
