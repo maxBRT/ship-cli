@@ -324,6 +324,15 @@ func (c fakeCapture) stdin(t *testing.T) string {
 	return string(b)
 }
 
+func (c fakeCapture) cwd(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(c.dir, "cwd"))
+	if err != nil {
+		t.Fatalf("read cwd: %v", err)
+	}
+	return strings.TrimSpace(string(b))
+}
+
 func writeFakeAgent(t *testing.T, cfg fakeAgentConfig) (string, fakeCapture) {
 	t.Helper()
 	dir := t.TempDir()
@@ -340,6 +349,7 @@ func writeFakeAgent(t *testing.T, cfg fakeAgentConfig) (string, fakeCapture) {
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("dir=$(dirname \"$0\")\n")
 	b.WriteString("printf '%s\\n' \"$@\" > \"$dir/args\"\n")
+	b.WriteString("pwd > \"$dir/cwd\"\n")
 	b.WriteString("cat > \"$dir/stdin\"\n")
 	if cfg.sleep > 0 {
 		// exec so CommandContext kill targets the sleeper, not a parent shell

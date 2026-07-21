@@ -3,6 +3,7 @@ package run_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ func writeShipYAML(t *testing.T, dir, content string) {
 
 const fullYAML = `branch: ""
 feature: ""
-agent: agent
+agent: cursor
 model: ""
 max_iterations: 10
 timeout: 20m
@@ -43,8 +44,8 @@ func TestParseConfig_yamlDefaults(t *testing.T) {
 	if cfg.Feature != "" {
 		t.Errorf("Feature = %q, want empty", cfg.Feature)
 	}
-	if cfg.Agent != "agent" {
-		t.Errorf("Agent = %q, want %q", cfg.Agent, "agent")
+	if cfg.Agent != "cursor" {
+		t.Errorf("Agent = %q, want %q", cfg.Agent, "cursor")
 	}
 	if cfg.Model != "" {
 		t.Errorf("Model = %q, want empty", cfg.Model)
@@ -61,7 +62,7 @@ func TestParseConfig_yamlOverridesBuiltInDefaults(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: feat/widget
 feature: widget
-agent: cursor-agent
+agent: pi
 model: composer
 max_iterations: 3
 timeout: 5m
@@ -78,8 +79,8 @@ timeout: 5m
 	if cfg.Feature != "widget" {
 		t.Errorf("Feature = %q, want widget", cfg.Feature)
 	}
-	if cfg.Agent != "cursor-agent" {
-		t.Errorf("Agent = %q, want cursor-agent", cfg.Agent)
+	if cfg.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", cfg.Agent)
 	}
 	if cfg.Model != "composer" {
 		t.Errorf("Model = %q, want composer", cfg.Model)
@@ -96,7 +97,7 @@ func TestParseConfig_flagsOverrideYAML(t *testing.T) {
 	dir := t.TempDir()
 	writeShipYAML(t, dir, `branch: from-yaml
 feature: yaml-feature
-agent: yaml-agent
+agent: cursor
 model: yaml-model
 max_iterations: 7
 timeout: 2m
@@ -104,7 +105,7 @@ timeout: 2m
 	args := []string{
 		"--branch", "from-flag",
 		"--feature", "flag-feature",
-		"--agent", "flag-agent",
+		"--agent", "claude",
 		"--model", "flag-model",
 		"--max-iterations", "4",
 		"--timeout", "30s",
@@ -120,8 +121,8 @@ timeout: 2m
 	if cfg.Feature != "flag-feature" {
 		t.Errorf("Feature = %q, want flag-feature", cfg.Feature)
 	}
-	if cfg.Agent != "flag-agent" {
-		t.Errorf("Agent = %q, want flag-agent", cfg.Agent)
+	if cfg.Agent != "claude" {
+		t.Errorf("Agent = %q, want claude", cfg.Agent)
 	}
 	if cfg.Model != "flag-model" {
 		t.Errorf("Model = %q, want flag-model", cfg.Model)
@@ -131,6 +132,64 @@ timeout: 2m
 	}
 	if cfg.Timeout != 30*time.Second {
 		t.Errorf("Timeout = %v, want 30s", cfg.Timeout)
+	}
+}
+
+func TestParseConfig_rejectsUnknownAgentKind(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, `branch: ""
+feature: ""
+agent: opencode
+model: ""
+max_iterations: 10
+timeout: 20m
+`)
+
+	_, err := run.ParseConfig(nil, dir)
+	if err == nil {
+		t.Fatal("ParseConfig: want error for unknown agent kind")
+	}
+	if !strings.Contains(err.Error(), "opencode") {
+		t.Errorf("error should name the unknown kind; got %v", err)
+	}
+}
+
+func TestParseConfig_rejectsLegacyBinaryAgentWithMigrationHint(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, `branch: ""
+feature: ""
+agent: agent
+model: ""
+max_iterations: 10
+timeout: 20m
+`)
+
+	_, err := run.ParseConfig(nil, dir)
+	if err == nil {
+		t.Fatal("ParseConfig: want error for legacy binary-style agent")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "agent: cursor") {
+		t.Errorf("error should hint agent: cursor; got %v", err)
+	}
+}
+
+func TestParseConfig_rejectsAbsolutePathAgentWithMigrationHint(t *testing.T) {
+	dir := t.TempDir()
+	writeShipYAML(t, dir, `branch: ""
+feature: ""
+agent: /usr/local/bin/agent
+model: ""
+max_iterations: 10
+timeout: 20m
+`)
+
+	_, err := run.ParseConfig(nil, dir)
+	if err == nil {
+		t.Fatal("ParseConfig: want error for absolute path agent")
+	}
+	if !strings.Contains(err.Error(), "agent: cursor") {
+		t.Errorf("error should hint agent: cursor; got %v", err)
 	}
 }
 

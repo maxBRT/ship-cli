@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,21 @@ type Config struct {
 	Model         string
 	MaxIterations int
 	Timeout       time.Duration
+}
+
+// Agent kinds accepted by agent: / --agent.
+const (
+	AgentKindCursor = "cursor"
+	AgentKindPi     = "pi"
+	AgentKindCodex  = "codex"
+	AgentKindClaude = "claude"
+)
+
+var knownAgentKinds = map[string]struct{}{
+	AgentKindCursor: {},
+	AgentKindPi:     {},
+	AgentKindCodex:  {},
+	AgentKindClaude: {},
 }
 
 // WriteUsage prints CLI help using Ship domain language.
@@ -44,7 +60,7 @@ Config:
 
 func defaultConfig() Config {
 	return Config{
-		Agent:         "agent",
+		Agent:         AgentKindCursor,
 		MaxIterations: 10,
 		Timeout:       20 * time.Minute,
 	}
@@ -54,7 +70,7 @@ func newFlagSet(cfg *Config) *flag.FlagSet {
 	fs := flag.NewFlagSet("ship", flag.ContinueOnError)
 	fs.StringVar(&cfg.Branch, "branch", cfg.Branch, "git branch for the Run (empty means generate ship/<id>)")
 	fs.StringVar(&cfg.Feature, "feature", cfg.Feature, "optional extra filter label for ship Tickets")
-	fs.StringVar(&cfg.Agent, "agent", cfg.Agent, "Agent binary used for every Phase")
+	fs.StringVar(&cfg.Agent, "agent", cfg.Agent, "Agent kind for every Phase (cursor, pi, codex, claude)")
 	fs.StringVar(&cfg.Model, "model", cfg.Model, "optional model for the Agent")
 	fs.IntVar(&cfg.MaxIterations, "max-iterations", cfg.MaxIterations, "max Iterations (one Ticket each) before Final")
 	fs.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "per-Phase timeout (Go duration)")
@@ -75,5 +91,25 @@ func ParseConfig(args []string, dir string) (Config, error) {
 		return Config{}, err
 	}
 
+	if err := validateAgentKind(cfg.Agent); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func validateAgentKind(kind string) error {
+	if _, ok := knownAgentKinds[kind]; ok {
+		return nil
+	}
+	if isLegacyBinaryAgent(kind) {
+		return fmt.Errorf("agent %q is a legacy binary path; use agent: cursor (or pi, codex, claude)", kind)
+	}
+	return fmt.Errorf("unknown agent kind %q (want cursor, pi, codex, or claude)", kind)
+}
+
+func isLegacyBinaryAgent(kind string) bool {
+	if kind == "agent" {
+		return true
+	}
+	return strings.Contains(kind, "/") || strings.Contains(kind, `\`)
 }
