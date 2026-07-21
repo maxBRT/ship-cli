@@ -125,37 +125,6 @@ func TestInteractive_noneConfirmsEmptySelection(t *testing.T) {
 	}
 }
 
-func TestInteractive_showsLeftoverShipHint(t *testing.T) {
-	var out bytes.Buffer
-	p := run.Interactive{
-		In:  strings.NewReader("\n"),
-		Out: &out,
-		IsTerminal: func() bool {
-			return true
-		},
-	}
-	candidates := []ticket.Ticket{
-		{Number: 7, Title: "leftover", OnShip: true},
-		{Number: 8, Title: "fresh", OnShip: false},
-	}
-
-	if _, err := p.Confirm(context.Background(), candidates); err != nil {
-		t.Fatalf("Confirm: %v", err)
-	}
-	text := out.String()
-	if !strings.Contains(text, "#7") || !strings.Contains(text, "leftover") {
-		t.Errorf("picker output missing Ticket #7:\n%s", text)
-	}
-	if !strings.Contains(text, "[ship]") {
-		t.Errorf("picker output missing leftover ship hint:\n%s", text)
-	}
-	for _, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, "#8") && strings.Contains(line, "[ship]") {
-			t.Errorf("fresh Ticket line should not show [ship]: %q", line)
-		}
-	}
-}
-
 func ticketNumbers(ts []ticket.Ticket) []int {
 	out := make([]int, len(ts))
 	for i, t := range ts {

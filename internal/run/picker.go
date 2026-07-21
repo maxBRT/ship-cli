@@ -20,8 +20,8 @@ var ErrNonInteractive = errors.New("interactive Ticket picker requires a termina
 // ErrCanceled is returned when the user cancels queue confirmation.
 var ErrCanceled = errors.New("queue confirmation canceled")
 
-// Interactive is the production Queue: an interactive Ticket picker over Ready
-// for Agent candidates. Confirm, drop, and reorder happen before any Phase.
+// Interactive is the production Queue: an interactive Ticket picker over
+// ship-labeled candidates. Confirm, drop, and reorder happen before any Phase.
 type Interactive struct {
 	In  io.Reader // optional; default os.Stdin
 	Out io.Writer // optional; default os.Stderr
@@ -37,15 +37,10 @@ func (p Interactive) Confirm(_ context.Context, candidates []ticket.Ticket) ([]t
 	in := p.in()
 	out := p.out()
 
-	fmt.Fprintln(out, "Ready for Agent Tickets - confirm the ship queue.")
-	fmt.Fprintln(out, "Leftover ship membership is marked [ship].")
+	fmt.Fprintln(out, "ship Tickets - confirm the Run queue.")
 	fmt.Fprintln(out)
 	for i, t := range candidates {
-		hint := ""
-		if t.OnShip {
-			hint = "  [ship]"
-		}
-		fmt.Fprintf(out, "  %d. #%d %s%s\n", i+1, t.Number, t.Title, hint)
+		fmt.Fprintf(out, "  %d. #%d %s\n", i+1, t.Number, t.Title)
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Enter numbers in Run order (e.g. 2 1), empty line for all,")

@@ -21,19 +21,19 @@ func TestListReady_ordersByNumberThenCreatedDate(t *testing.T) {
 								"number": 10,
 								"title": "newer higher number",
 								"createdAt": "2026-06-01T00:00:00Z",
-								"labels": {"nodes": [{"name": "ready-for-agent"}]}
+								"labels": {"nodes": [{"name": "ship"}]}
 							},
 							{
 								"number": 3,
 								"title": "older lower number",
 								"createdAt": "2026-01-01T00:00:00Z",
-								"labels": {"nodes": [{"name": "ready-for-agent"}]}
+								"labels": {"nodes": [{"name": "ship"}]}
 							},
 							{
 								"number": 7,
 								"title": "middle",
 								"createdAt": "2026-03-01T00:00:00Z",
-								"labels": {"nodes": [{"name": "ready-for-agent"}]}
+								"labels": {"nodes": [{"name": "ship"}]}
 							}
 						]
 					}
@@ -71,7 +71,7 @@ func TestListReady_filtersByFeatureLabel(t *testing.T) {
 								"title": "other feature",
 								"createdAt": "2026-01-01T00:00:00Z",
 								"labels": {"nodes": [
-									{"name": "ready-for-agent"},
+									{"name": "ship"},
 									{"name": "feat-other"}
 								]}
 							},
@@ -80,7 +80,7 @@ func TestListReady_filtersByFeatureLabel(t *testing.T) {
 								"title": "wanted feature",
 								"createdAt": "2026-02-01T00:00:00Z",
 								"labels": {"nodes": [
-									{"name": "ready-for-agent"},
+									{"name": "ship"},
 									{"name": "feat-ship"}
 								]}
 							}
@@ -97,53 +97,6 @@ func TestListReady_filtersByFeatureLabel(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Number != 11 {
 		t.Fatalf("ListReady = %v, want only #11", numbers(got))
-	}
-}
-
-func TestListReady_marksLeftoverShipMembership(t *testing.T) {
-	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
-		"repo view --json nameWithOwner": `{"nameWithOwner":"maxBRT/ship-cli"}`,
-		"api graphql": `{
-			"data": {
-				"repository": {
-					"issues": {
-						"nodes": [
-							{
-								"number": 7,
-								"title": "leftover",
-								"createdAt": "2026-01-01T00:00:00Z",
-								"labels": {"nodes": [
-									{"name": "ready-for-agent"},
-									{"name": "ship"}
-								]}
-							},
-							{
-								"number": 8,
-								"title": "fresh",
-								"createdAt": "2026-02-01T00:00:00Z",
-								"labels": {"nodes": [
-									{"name": "ready-for-agent"}
-								]}
-							}
-						]
-					}
-				}
-			}
-		}`,
-	})}
-
-	got, err := gh.ListReady(context.Background(), "")
-	if err != nil {
-		t.Fatalf("ListReady: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("ListReady len=%d, want 2", len(got))
-	}
-	if !got[0].OnShip {
-		t.Errorf("Ticket #7 OnShip = false, want true (leftover ship hint)")
-	}
-	if got[1].OnShip {
-		t.Errorf("Ticket #8 OnShip = true, want false")
 	}
 }
 

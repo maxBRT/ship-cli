@@ -7,10 +7,6 @@ import "context"
 type Ticket struct {
 	Number int
 	Title  string
-	// OnShip is true when the Ticket already carries leftover ship queue
-	// membership from a prior Abort or Partial Progress. The picker may show
-	// this as a hint; it never skips confirmation.
-	OnShip bool
 }
 
 // Label names on the GitHub tracker for Ticket states Ship manages.
@@ -26,8 +22,8 @@ type Port interface {
 	// missing from the tracker, so queue stamping and Done can succeed.
 	EnsureLabels(ctx context.Context) error
 
-	// ListReady returns Tickets labeled Ready for Agent, optionally also
-	// matching feature, in stable default order (issue number / created date).
+	// ListReady returns Tickets labeled ship, optionally also matching
+	// feature, in stable default order (issue number / created date).
 	ListReady(ctx context.Context, feature string) ([]Ticket, error)
 
 	// Stamp adds the ship label to the confirmed queue without removing

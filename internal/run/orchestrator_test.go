@@ -152,9 +152,9 @@ func TestRun_emptyQueueExitsWithoutBranchOrWork(t *testing.T) {
 	}
 
 	if !tickets.ensured {
-		t.Error("EnsureLabels was not called before listing Ready for Agent Tickets")
+		t.Error("EnsureLabels was not called before listing ship Tickets")
 	}
-	if !strings.Contains(out.String(), "No Ready for Agent Tickets") {
+	if !strings.Contains(out.String(), "No ship Tickets") {
 		t.Errorf("stdout = %q, want empty-queue message", out.String())
 	}
 	if b := currentBranch(t, dir); b != "main" {
@@ -446,7 +446,7 @@ func TestRun_processesFrozenShipQueueDespiteMidRunReadyChanges(t *testing.T) {
 		t.Errorf("done = %v, want [7 8] (frozen ship queue)", got)
 	}
 	if slices.Contains(tickets.stamped, 99) || slices.Contains(tickets.doneList, 99) {
-		t.Errorf("Run must ignore mid-Run Ready for Agent changes; stamped=%v done=%v", tickets.stamped, tickets.doneList)
+		t.Errorf("Run must ignore mid-Run ship Ticket changes; stamped=%v done=%v", tickets.stamped, tickets.doneList)
 	}
 }
 
@@ -1106,8 +1106,8 @@ func TestRun_reviewFailureAbortsAndUndoesTicketCommits(t *testing.T) {
 func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
 	dir := initTempRepo(t)
 	tickets := &fakeTickets{ready: []ticket.Ticket{
-		{Number: 7, Title: "seven", OnShip: true},
-		{Number: 8, Title: "eight", OnShip: true},
+		{Number: 7, Title: "seven"},
+		{Number: 8, Title: "eight"},
 	}}
 	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
 		return errors.New("agent boom")
@@ -1128,12 +1128,12 @@ func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
 	if queue.calls != 1 {
 		t.Fatalf("picker Confirm calls after Abort = %d, want 1", queue.calls)
 	}
-	if len(queue.saw[0]) != 2 || !queue.saw[0][0].OnShip || !queue.saw[0][1].OnShip {
-		t.Errorf("first picker candidates = %+v, want leftover ship hint on both", queue.saw[0])
+	if len(queue.saw[0]) != 2 {
+		t.Errorf("first picker candidates = %+v, want [7 8]", queue.saw[0])
 	}
 
-	// Leftover ship Tickets remain Ready; the next Run must open the picker
-	// again (no auto-resume), still showing leftover ship membership.
+	// Leftover ship Tickets remain listed; the next Run must open the picker
+	// again (no auto-resume).
 	prs := &fakePRs{}
 	ag2 := committingAgent(t, prs, "ship/run")
 	r.Agent = ag2
@@ -1144,8 +1144,8 @@ func TestRun_nextRunAfterAbortAlwaysOpensPicker(t *testing.T) {
 	if queue.calls != 2 {
 		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
 	}
-	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
-		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
+	if len(queue.saw[1]) != 2 {
+		t.Errorf("second picker candidates = %+v, want [7 8] without skipping picker", queue.saw[1])
 	}
 }
 
@@ -1178,12 +1178,12 @@ func TestRun_nextRunAfterPartialProgressAlwaysOpensPicker(t *testing.T) {
 	if got := tickets.doneList; !equalInts(got, []int{7}) {
 		t.Errorf("done = %v, want [7] (one Iteration before Final)", got)
 	}
-	if len(tickets.ready) != 2 || !tickets.ready[0].OnShip || !tickets.ready[1].OnShip {
+	if len(tickets.ready) != 2 {
 		t.Errorf("leftover ready = %+v, want #8 and #9 still carrying ship", tickets.ready)
 	}
 
-	// Remaining ship Tickets stay Ready; the next Run must open the picker
-	// again (no auto-resume), still showing leftover ship membership.
+	// Remaining ship Tickets stay listed; the next Run must open the picker
+	// again (no auto-resume).
 	prs2 := &fakePRs{}
 	ag2 := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
 		if isFinalPrompt(req.Prompt) {
@@ -1204,8 +1204,8 @@ func TestRun_nextRunAfterPartialProgressAlwaysOpensPicker(t *testing.T) {
 	if queue.calls != 2 {
 		t.Errorf("picker Confirm calls across Runs = %d, want 2 (always re-open)", queue.calls)
 	}
-	if len(queue.saw[1]) != 2 || !queue.saw[1][0].OnShip || !queue.saw[1][1].OnShip {
-		t.Errorf("second picker candidates = %+v, want leftover ship hint without skipping picker", queue.saw[1])
+	if len(queue.saw[1]) != 2 {
+		t.Errorf("second picker candidates = %+v, want [8 9] without skipping picker", queue.saw[1])
 	}
 }
 
@@ -1255,7 +1255,7 @@ func (f *fakeQueue) Confirm(_ context.Context, candidates []ticket.Ticket) ([]ti
 }
 
 // fakeTickets is an in-memory Ticket port. Done removes a Ticket from the
-// Ready for Agent queue so the in-memory set can change mid-Run like a tracker.
+// ship queue so the in-memory set can change mid-Run like a tracker.
 type fakeTickets struct {
 	ready       []ticket.Ticket
 	stamped     []int
@@ -1280,11 +1280,6 @@ func (f *fakeTickets) ListReady(context.Context, string) ([]ticket.Ticket, error
 func (f *fakeTickets) Stamp(_ context.Context, tickets []ticket.Ticket) error {
 	for _, t := range tickets {
 		f.stamped = append(f.stamped, t.Number)
-		for i := range f.ready {
-			if f.ready[i].Number == t.Number {
-				f.ready[i].OnShip = true
-			}
-		}
 	}
 	if f.afterStamp != nil {
 		f.afterStamp(f)
