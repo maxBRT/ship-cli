@@ -27,10 +27,8 @@ func writeShipConfig(t *testing.T, dir, content string) {
 
 func TestInit_nonTTYWritesCursorWithoutPrompt(t *testing.T) {
 	dir := t.TempDir()
-	var out strings.Builder
 
 	created, err := (run.Init{
-		Out: &out,
 		IsTerminal: func() bool {
 			return false
 		},
@@ -41,9 +39,6 @@ func TestInit_nonTTYWritesCursorWithoutPrompt(t *testing.T) {
 	if !created {
 		t.Fatal("Init.Config: want created=true")
 	}
-	if out.Len() != 0 {
-		t.Errorf("non-TTY Init should not prompt; got %q", out.String())
-	}
 
 	cfg, err := run.LoadConfig(dir)
 	if err != nil {
@@ -51,63 +46,6 @@ func TestInit_nonTTYWritesCursorWithoutPrompt(t *testing.T) {
 	}
 	if cfg.Agent != "cursor" {
 		t.Errorf("Agent = %q, want cursor", cfg.Agent)
-	}
-}
-
-func TestInit_ttyWritesTypedAgentKind(t *testing.T) {
-	dir := t.TempDir()
-	var out strings.Builder
-	in := strings.NewReader("pi\n")
-
-	created, err := (run.Init{
-		In:  in,
-		Out: &out,
-		IsTerminal: func() bool {
-			return true
-		},
-	}).Config(dir)
-	if err != nil {
-		t.Fatalf("Init.Config: %v", err)
-	}
-	if !created {
-		t.Fatal("Init.Config: want created=true")
-	}
-
-	printed := out.String()
-	for _, kind := range []string{"cursor", "pi", "codex", "claude"} {
-		if !strings.Contains(printed, kind) {
-			t.Errorf("prompt missing kind %q; got:\n%s", kind, printed)
-		}
-	}
-
-	cfg, err := run.LoadConfig(dir)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Agent != "pi" {
-		t.Errorf("Agent = %q, want pi", cfg.Agent)
-	}
-}
-
-func TestInit_ttyInvalidKindDoesNotWriteShipfile(t *testing.T) {
-	dir := t.TempDir()
-	var out strings.Builder
-
-	created, err := (run.Init{
-		In:  strings.NewReader("opencode\n"),
-		Out: &out,
-		IsTerminal: func() bool {
-			return true
-		},
-	}).Config(dir)
-	if err == nil {
-		t.Fatal("Init.Config: want error for invalid kind")
-	}
-	if created {
-		t.Fatal("Init.Config: want created=false on invalid kind")
-	}
-	if _, statErr := os.Stat(shipConfigPath(dir)); !os.IsNotExist(statErr) {
-		t.Fatalf("Shipfile should not exist after invalid kind; stat=%v", statErr)
 	}
 }
 

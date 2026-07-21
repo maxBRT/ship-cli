@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -326,8 +325,6 @@ func TestRun_nonInteractivePickerFailsWithoutStamping(t *testing.T) {
 	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
 	ag := &fakeAgent{}
 	queue := run.Interactive{
-		In:  strings.NewReader(""),
-		Out: io.Discard,
 		IsTerminal: func() bool {
 			return false
 		},

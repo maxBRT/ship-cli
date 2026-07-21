@@ -47,7 +47,7 @@ func MainWith(args []string, stdout, stderr io.Writer, dir string, up update.Por
 		return 0
 	}
 
-	created, err := (run.Init{Out: stderr}).Config(dir)
+	created, err := (run.Init{}).Config(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -80,7 +80,7 @@ func MainWith(args []string, stdout, stderr io.Writer, dir string, up update.Por
 	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
 		Tickets:  gh,
-		Queue:    run.Interactive{Out: stderr},
+		Queue:    run.Interactive{},
 		Agent:    port,
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
@@ -120,7 +120,7 @@ func runUpdate(stdout, stderr io.Writer, up update.Port) int {
 }
 
 func runInit(stderr io.Writer, dir string) int {
-	created, err := (run.Init{Out: stderr}).Config(dir)
+	created, err := (run.Init{}).Config(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
