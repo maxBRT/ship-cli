@@ -213,6 +213,127 @@ func TestReleases_unsupportedPlatformError(t *testing.T) {
 	}
 }
 
+func TestReleases_nonHTTPSDownloadURLRejected(t *testing.T) {
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	if !supportedTestPlatform(goos, goarch) {
+		t.Skip("unsupported GOOS/GOARCH for this test")
+	}
+	exe := filepath.Join(t.TempDir(), "ship")
+	original := []byte("old-ship")
+	if err := os.WriteFile(exe, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ver := "2.0.0"
+	asset := archiveName(ver, goos, goarch)
+	sumsName := fmt.Sprintf("ship-cli_%s_checksums.txt", ver)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/maxBRT/ship-cli/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `{
+			"tag_name":"v%s",
+			"assets":[
+				{"name":%q,"browser_download_url":"http://example.com/download/%s"},
+				{"name":%q,"browser_download_url":"http://example.com/download/checksums.txt"}
+			]
+		}`, ver, asset, asset, sumsName)
+	}))
+	t.Cleanup(srv.Close)
+
+	up := &update.Releases{
+		Owner: "maxBRT", Repo: "ship-cli", Version: "v1.0.0",
+		Executable: exe, GOOS: goos, GOARCH: goarch,
+		APIBase: srv.URL, Client: srv.Client(),
+	}
+	_, err := up.Update(context.Background())
+	if err == nil {
+		t.Fatal("Update error = nil, want HTTPS failure")
+	}
+	if !strings.Contains(err.Error(), "HTTPS") {
+		t.Errorf("error should mention HTTPS; got %v", err)
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("binary changed after HTTPS failure; want intact")
+	}
+}
+
+func TestReleases_downloadRateLimitReadable(t *testing.T) {
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	if !supportedTestPlatform(goos, goarch) {
+		t.Skip("unsupported GOOS/GOARCH for this test")
+	}
+	exe := filepath.Join(t.TempDir(), "ship")
+	original := []byte("old-ship")
+	if err := os.WriteFile(exe, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ver := "2.0.0"
+	asset := archiveName(ver, goos, goarch)
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
+			fmt.Fprintf(w, `{
+				"tag_name":"v%s",
+				"assets":[
+					{"name":%q,"browser_download_url":%q},
+					{"name":%q,"browser_download_url":%q}
+				]
+			}`, ver, asset, srvURL+"/download/"+asset,
+				fmt.Sprintf("ship-cli_%s_checksums.txt", ver), srvURL+"/download/checksums.txt")
+		case strings.HasPrefix(r.URL.Path, "/download/"):
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, "rate limited")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	srvURL = srv.URL
+
+	up := &update.Releases{
+		Owner: "maxBRT", Repo: "ship-cli", Version: "v1.0.0",
+		Executable: exe, GOOS: goos, GOARCH: goarch,
+		APIBase: srv.URL, Client: srv.Client(),
+	}
+	_, err := up.Update(context.Background())
+	if err == nil {
+		t.Fatal("Update error = nil, want rate-limit failure")
+	}
+	if !strings.Contains(err.Error(), "rate limit") {
+		t.Errorf("error should mention rate limit; got %v", err)
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("binary changed after rate-limit failure; want intact")
+	}
+}
+
+func supportedTestPlatform(goos, goarch string) bool {
+	switch goos {
+	case "linux", "darwin", "windows":
+	default:
+		return false
+	}
+	switch goarch {
+	case "amd64", "arm64":
+		return true
+	default:
+		return false
+	}
+}
+
 func TestReleases_nonWritableBinaryRefused(t *testing.T) {
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	dir := t.TempDir()

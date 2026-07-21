@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -180,15 +182,45 @@ func (r *Releases) fetchLatest(ctx context.Context) (ghRelease, error) {
 	return rel, nil
 }
 
-func (r *Releases) download(ctx context.Context, url string) ([]byte, error) {
-	body, status, err := r.get(ctx, url, "application/octet-stream")
+func (r *Releases) download(ctx context.Context, rawURL string) ([]byte, error) {
+	if err := requireHTTPS(rawURL); err != nil {
+		return nil, err
+	}
+	body, status, err := r.get(ctx, rawURL, "application/octet-stream")
 	if err != nil {
 		return nil, err
+	}
+	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("GitHub rate limit or forbidden (%s)", http.StatusText(status))
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("%s", http.StatusText(status))
 	}
 	return body, nil
+}
+
+// requireHTTPS insists on HTTPS for release downloads. Loopback HTTP is allowed
+// so unit tests can serve assets over httptest.
+func requireHTTPS(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("update: bad download URL: %w", err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("update: download URL must use HTTPS")
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (r *Releases) get(ctx context.Context, url, accept string) ([]byte, int, error) {
@@ -300,9 +332,28 @@ func replaceBinary(dest string, bin []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("update: close temp binary: %w", err)
 	}
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := atomicReplace(tmpName, dest); err != nil {
 		return fmt.Errorf("update: replace binary: %w", err)
 	}
+	return nil
+}
+
+// atomicReplace renames tmp onto dest. On Windows, os.Rename cannot overwrite an
+// existing file, so the current binary is moved aside first.
+func atomicReplace(tmp, dest string) error {
+	if runtime.GOOS != "windows" {
+		return os.Rename(tmp, dest)
+	}
+	bak := dest + ".old"
+	_ = os.Remove(bak)
+	if err := os.Rename(dest, bak); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Rename(bak, dest) // best-effort restore
+		return err
+	}
+	_ = os.Remove(bak)
 	return nil
 }
 
