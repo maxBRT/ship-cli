@@ -62,12 +62,42 @@ func TestNew_piReturnsPortUsingPiOnPATH(t *testing.T) {
 	assertHasFlag(t, capture.args(t), "--approve")
 }
 
-func TestNew_unimplementedKindErrors(t *testing.T) {
-	_, err := agent.New("codex")
-	if err == nil {
-		t.Fatal("New(codex): want error until adapter lands")
+func TestNew_codexReturnsPortUsingCodexOnPATH(t *testing.T) {
+	bin, capture := writeFakeAgent(t, fakeAgentConfig{
+		exitCode: 0,
+		stdout:   `{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}` + "\n",
+	})
+	codexBin := filepath.Join(filepath.Dir(bin), "codex")
+	if err := os.Rename(bin, codexBin); err != nil {
+		t.Fatalf("rename fake to codex: %v", err)
 	}
-	if !strings.Contains(err.Error(), "codex") {
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	port, err := agent.New("codex")
+	if err != nil {
+		t.Fatalf("New(codex): %v", err)
+	}
+
+	err = port.RunPhase(context.Background(), agent.PhaseRequest{
+		Prompt:    "implement",
+		Workspace: t.TempDir(),
+		Timeout:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	args := capture.args(t)
+	assertHasFlag(t, args, "exec")
+	assertHasFlag(t, args, "--ephemeral")
+	assertHasFlag(t, args, "--json")
+}
+
+func TestNew_unimplementedKindErrors(t *testing.T) {
+	_, err := agent.New("claude")
+	if err == nil {
+		t.Fatal("New(claude): want error until adapter lands")
+	}
+	if !strings.Contains(err.Error(), "claude") {
 		t.Errorf("error should name kind; got %v", err)
 	}
 }
@@ -101,6 +131,19 @@ func TestRequireOnPATH_failsWhenPiBinaryMissing(t *testing.T) {
 		t.Fatal("RequireOnPATH(pi): want error when pi missing")
 	}
 	if !strings.Contains(err.Error(), "pi") {
+		t.Errorf("error should mention default binary; got %v", err)
+	}
+}
+
+func TestRequireOnPATH_failsWhenCodexBinaryMissing(t *testing.T) {
+	empty := t.TempDir()
+	t.Setenv("PATH", empty)
+
+	err := agent.RequireOnPATH("codex")
+	if err == nil {
+		t.Fatal("RequireOnPATH(codex): want error when codex missing")
+	}
+	if !strings.Contains(err.Error(), "codex") {
 		t.Errorf("error should mention default binary; got %v", err)
 	}
 }
