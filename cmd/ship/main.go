@@ -78,6 +78,9 @@ func MainWith(args []string, stdout, stderr io.Writer, dir string, up update.Por
 	}
 
 	gh := &ticket.GitHub{}
+	color := colorEnabled(stderr)
+	obs := observe.New(dir, stderr)
+	obs.Color = color
 	orchestrator := run.Orchestrator{
 		Tickets:  gh,
 		Queue:    run.Interactive{},
@@ -85,9 +88,11 @@ func MainWith(args []string, stdout, stderr io.Writer, dir string, up update.Por
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
-		Throbber: throbber.Line{Out: stderr, Color: true},
-		Observer: observe.New(dir, stderr),
+		Throbber: throbber.Line{Out: stderr, Color: color},
+		Observer: obs,
 		Herdr:    herdr.Reporter{},
+		Header:   stderr,
+		Color:    color,
 		Stdout:   stdout,
 	}
 	if err := orchestrator.Run(context.Background()); err != nil {
@@ -149,4 +154,17 @@ func wantsVersion(args []string) bool {
 		}
 	}
 	return false
+}
+
+// colorEnabled is true when w is a terminal character device (TTY).
+func colorEnabled(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }

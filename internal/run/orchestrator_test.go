@@ -90,8 +90,8 @@ func TestRun_afterPhase_dumpsHighSignalToolAndTokenLines(t *testing.T) {
 	}
 
 	got := dump.String()
-	// Three Phases each dump one high-signal tools+tokens line.
-	want := "tools  1  tokens  input=120 output=45 cache_read=10 cache_write=2"
+	// Three Phases each dump one dense tools + compact in/out strip.
+	want := "tools  1  ·  in 120  ·  out 45"
 	if c := strings.Count(got, want); c != 3 {
 		t.Errorf("phase dump lines = %d, want 3; got:\n%s", c, got)
 	}
@@ -922,7 +922,7 @@ func TestRun_phaseFailure_printsAbortBannerWithReportPaths(t *testing.T) {
 	}
 
 	got := stderr.String()
-	for _, want := range []string{"Abort", "Run", "Phase", runDir, logs[0]} {
+	for _, want := range []string{"Abort", "report", "phase log", runDir, logs[0]} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Abort banner missing %q; got:\n%s", want, got)
 		}
@@ -966,8 +966,8 @@ func TestRun_phaseFailure_abortBannerIncludesLastToolLines(t *testing.T) {
 
 	got := stderr.String()
 	for _, want := range []string{
-		"tool  Read  42ms  ok",
-		"tool  Write  7ms  error",
+		"Read  42ms  ok",
+		"Write  7ms  error",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Abort banner missing %q; got:\n%s", want, got)
@@ -1016,10 +1016,10 @@ func TestRun_phaseFailure_abortBannerWithoutSuccessDump(t *testing.T) {
 	if !strings.Contains(got, "Abort") {
 		t.Errorf("banner missing Abort; got:\n%s", got)
 	}
-	if !strings.Contains(got, "tool  Shell  3ms  ok") {
+	if !strings.Contains(got, "Shell  3ms  ok") {
 		t.Errorf("banner missing last tool line; got:\n%s", got)
 	}
-	if strings.Contains(got, "tokens") {
+	if strings.Contains(got, "tokens") || strings.Contains(got, " ·  in ") {
 		t.Errorf("banner ran success dump (tokens line); got:\n%s", got)
 	}
 	runsRoot := filepath.Join(dir, ".ship", "runs")
@@ -1299,12 +1299,14 @@ func TestRun_nextRunAfterPartialProgressAlwaysOpensPicker(t *testing.T) {
 
 // recordingThrobber records Phase labels and that work ran inside During.
 type recordingThrobber struct {
-	phases    []string
-	workCalls int
+	phases     []string
+	remainings []string
+	workCalls  int
 }
 
 func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, work func(context.Context) error) error {
 	r.phases = append(r.phases, status.Phase)
+	r.remainings = append(r.remainings, status.Remaining)
 	r.workCalls++
 	return work(ctx)
 }

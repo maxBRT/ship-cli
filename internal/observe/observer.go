@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/maxBRT/ship-cli/internal/theme"
 )
 
 // Port is the Run-owned observability surface: it receives curated events
@@ -18,11 +21,11 @@ type Port interface {
 	// BeginPhase starts buffering for one Phase and returns the Sink Agent
 	// adapters emit into. Mid-Phase Emit must not write tool lines to Out.
 	BeginPhase(phase string) Sink
-	// EndPhase dumps one high-signal line with the tool total and token
-	// totals collected since BeginPhase, then clears the buffer.
+	// EndPhase dumps one dense strip with the tool total and compact
+	// in/out token totals collected since BeginPhase, then clears the buffer.
 	EndPhase()
-	// Abort prints a stderr banner with the Run report directory, Phase log
-	// path, and last tool lines, then clears the buffer. Used on Phase
+	// Abort prints a loud stderr banner with the Run report directory, Phase
+	// log path, and last tool lines, then clears the buffer. Used on Phase
 	// failure instead of EndPhase so the banner does not rely on the
 	// success dump.
 	Abort()
@@ -32,8 +35,9 @@ type Port interface {
 // when EndPhase is called. Safe for concurrent Emit from an Agent adapter.
 // Dir is the workspace root; Phase reports land under Dir/.ship/runs/<run-id>/.
 type Observer struct {
-	Dir string
-	Out io.Writer
+	Dir   string
+	Out   io.Writer
+	Color bool // red Abort chrome; plain when false
 
 	mu       sync.Mutex
 	events   []Event
@@ -96,8 +100,9 @@ func (o *Observer) Emit(e Event) {
 	_ = enc.Encode(e)
 }
 
-// EndPhase writes one high-signal line with the tool total and any token
-// totals, then clears the buffer. Per-tool detail stays in the Phase log.
+// EndPhase writes one dense strip with the tool total and compact in/out
+// token totals, then clears the buffer. Per-tool detail and cache fields
+// stay in the Phase log.
 func (o *Observer) EndPhase() {
 	o.mu.Lock()
 	events := o.events
@@ -120,16 +125,16 @@ func (o *Observer) EndPhase() {
 		return
 	}
 	if tokens == nil {
-		fmt.Fprintf(o.Out, "tools  %d\n", tools)
+		fmt.Fprintf(o.Out, "  tools  %d\n", tools)
 		return
 	}
-	fmt.Fprintf(o.Out, "tools  %d  tokens  input=%d output=%d cache_read=%d cache_write=%d\n",
-		tools, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite)
+	fmt.Fprintf(o.Out, "  tools  %d  ·  in %s  ·  out %s\n",
+		tools, compactCount(tokens.Input), compactCount(tokens.Output))
 }
 
-// Abort writes a banner with Run report and Phase log paths plus the last
-// handful of tool one-liners, then clears the buffer without running the
-// success dump.
+// Abort writes a loud banner with Run report and Phase log paths plus the
+// last handful of tool one-liners, then clears the buffer without running the
+// success dump. When Color is false, marks stay plain (no ANSI).
 func (o *Observer) Abort() {
 	o.mu.Lock()
 	runDir := o.runDir
@@ -138,12 +143,19 @@ func (o *Observer) Abort() {
 	o.events = nil
 	o.mu.Unlock()
 
-	fmt.Fprintf(o.Out, "Abort: Phase failed\n")
+	mark := "✗ Abort"
+	sep := "────────────────────────────────────────────"
+	if o.Color {
+		style := lipgloss.NewStyle().Foreground(theme.Red)
+		mark = style.Render("✗ Abort")
+		sep = style.Render(sep)
+	}
+	fmt.Fprintf(o.Out, "%s  Phase failed\n", mark)
 	if runDir != "" {
-		fmt.Fprintf(o.Out, "Run report: %s\n", runDir)
+		fmt.Fprintf(o.Out, "  report  %s\n", runDir)
 	}
 	if phaseLog != "" {
-		fmt.Fprintf(o.Out, "Phase log: %s\n", phaseLog)
+		fmt.Fprintf(o.Out, "  phase log  %s\n", phaseLog)
 	}
 
 	var tools []Event
@@ -155,9 +167,31 @@ func (o *Observer) Abort() {
 	if n := len(tools); n > abortToolLimit {
 		tools = tools[n-abortToolLimit:]
 	}
-	for _, e := range tools {
-		fmt.Fprintf(o.Out, "tool  %s  %dms  %s\n", e.Name, e.DurationMS, e.Status)
+	if len(tools) > 0 {
+		fmt.Fprintln(o.Out, sep)
 	}
+	for _, e := range tools {
+		fmt.Fprintf(o.Out, "  %s  %dms  %s\n", e.Name, e.DurationMS, e.Status)
+	}
+}
+
+// compactCount renders token totals for the dense observe strip (e.g. 18.4k).
+func compactCount(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 1_000_000 {
+		v := float64(n) / 1000
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%.0fk", v)
+		}
+		return fmt.Sprintf("%.1fk", v)
+	}
+	v := float64(n) / 1_000_000
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%.0fM", v)
+	}
+	return fmt.Sprintf("%.1fM", v)
 }
 
 // abortToolLimit is how many trailing tool lines the Abort banner keeps.

@@ -27,9 +27,11 @@ type Orchestrator struct {
 	PRs      PullRequests
 	Repo     gitops.Repo
 	Config   Config
-	Throbber throbber.Port  // optional; nil means no wait UI
-	Observer observe.Port   // optional; nil means no Phase observability
-	Herdr    herdr.Port     // optional; nil means no multiplexer agent-state reports
+	Throbber throbber.Port // optional; nil means no wait UI
+	Observer observe.Port  // optional; nil means no Phase observability
+	Herdr    herdr.Port    // optional; nil means no multiplexer agent-state reports
+	Header   io.Writer // optional; Run header (stderr in production)
+	Color    bool      // Run header color; plain when false
 	Stdout   io.Writer
 }
 
@@ -84,13 +86,17 @@ func (r Orchestrator) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("prepare Run branch: %w", err)
 	}
+	if r.Header != nil {
+		WriteRunHeader(r.Header, r.Config.Agent, branch, r.Color)
+	}
 	var done []ticket.Ticket
 	iterations := 0
 	for iterations < r.Config.MaxIterations && iterations < len(queue) {
 		t := queue[iterations]
+		remaining := FormatQueueRemaining(ticketNumbersAfter(queue, iterations))
 		iterations++
 
-		if err := r.iterate(ctx, t, branch, iterations); err != nil {
+		if err := r.iterate(ctx, t, branch, iterations, remaining); err != nil {
 			return err
 		}
 		done = append(done, t)
@@ -108,7 +114,7 @@ func (r Orchestrator) Run(ctx context.Context) error {
 // (which must commit), the Review Phase (which may be commitless), then Done.
 // A failed Phase or missing side effect Aborts: undoes that Ticket's commits
 // and stops the Run. Unfinished Tickets keep ship queue membership.
-func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string, iteration int) error {
+func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch string, iteration int, remaining string) error {
 	restore, err := r.Repo.RecordRestorePoint()
 	if err != nil {
 		return r.abort(t, gitops.RestorePoint(""), fmt.Errorf("record restore point for Ticket #%d: %w", t.Number, err))
@@ -116,7 +122,7 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 
 	ticketLabel := fmt.Sprintf("#%d %s", t.Number, t.Title)
 	implInput := prompt.ImplementInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, throbber.Status{Phase: "Implement", Iteration: iteration, Ticket: ticketLabel}, prompt.Implement(implInput)); err != nil {
+	if err := r.runPhase(ctx, throbber.Status{Phase: "Implement", Iteration: iteration, Ticket: ticketLabel, Remaining: remaining}, prompt.Implement(implInput)); err != nil {
 		return r.abort(t, restore, fmt.Errorf("Implement Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -129,7 +135,7 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 
 	reviewInput := prompt.ReviewInput{Ticket: ticketInput(t), Branch: branch}
-	if err := r.runPhase(ctx, throbber.Status{Phase: "Review", Iteration: iteration, Ticket: ticketLabel}, prompt.Review(reviewInput)); err != nil {
+	if err := r.runPhase(ctx, throbber.Status{Phase: "Review", Iteration: iteration, Ticket: ticketLabel, Remaining: remaining}, prompt.Review(reviewInput)); err != nil {
 		return r.abort(t, restore, fmt.Errorf("Review Phase for Ticket #%d: %w", t.Number, err))
 	}
 
@@ -138,6 +144,17 @@ func (r Orchestrator) iterate(ctx context.Context, t ticket.Ticket, branch strin
 	}
 	fmt.Fprintf(r.stdout(), "Ticket #%d Done\n", t.Number)
 	return nil
+}
+
+func ticketNumbersAfter(queue []ticket.Ticket, idx int) []int {
+	if idx+1 >= len(queue) {
+		return nil
+	}
+	out := make([]int, 0, len(queue)-idx-1)
+	for _, t := range queue[idx+1:] {
+		out = append(out, t.Number)
+	}
+	return out
 }
 
 // abort undoes that Ticket's commits on the Run branch and returns a clear
