@@ -31,7 +31,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 		return 0
 	}
 
-	created, err := run.InitConfig(dir)
+	created, err := (run.Init{Out: stderr}).Config(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -50,11 +50,22 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 		return 1
 	}
 
+	if err := agent.RequireOnPATH(cfg.Agent); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	port, err := agent.New(cfg.Agent)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
 	gh := &ticket.GitHub{}
 	orchestrator := run.Orchestrator{
 		Tickets:  gh,
 		Queue:    run.Interactive{Out: stderr},
-		Agent:    agent.Cursor{Bin: cfg.Agent},
+		Agent:    port,
 		PRs:      gh,
 		Repo:     gitops.Repo{Dir: dir},
 		Config:   cfg,
@@ -70,7 +81,7 @@ func Main(args []string, stdout, stderr io.Writer, dir string) int {
 }
 
 func runInit(stderr io.Writer, dir string) int {
-	created, err := run.InitConfig(dir)
+	created, err := (run.Init{Out: stderr}).Config(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

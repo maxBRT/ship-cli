@@ -25,10 +25,102 @@ func writeShipConfig(t *testing.T, dir, content string) {
 	}
 }
 
+func TestInit_nonTTYWritesCursorWithoutPrompt(t *testing.T) {
+	dir := t.TempDir()
+	var out strings.Builder
+
+	created, err := (run.Init{
+		Out: &out,
+		IsTerminal: func() bool {
+			return false
+		},
+	}).Config(dir)
+	if err != nil {
+		t.Fatalf("Init.Config: %v", err)
+	}
+	if !created {
+		t.Fatal("Init.Config: want created=true")
+	}
+	if out.Len() != 0 {
+		t.Errorf("non-TTY Init should not prompt; got %q", out.String())
+	}
+
+	cfg, err := run.LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Agent != "cursor" {
+		t.Errorf("Agent = %q, want cursor", cfg.Agent)
+	}
+}
+
+func TestInit_ttyWritesTypedAgentKind(t *testing.T) {
+	dir := t.TempDir()
+	var out strings.Builder
+	in := strings.NewReader("pi\n")
+
+	created, err := (run.Init{
+		In:  in,
+		Out: &out,
+		IsTerminal: func() bool {
+			return true
+		},
+	}).Config(dir)
+	if err != nil {
+		t.Fatalf("Init.Config: %v", err)
+	}
+	if !created {
+		t.Fatal("Init.Config: want created=true")
+	}
+
+	printed := out.String()
+	for _, kind := range []string{"cursor", "pi", "codex", "claude"} {
+		if !strings.Contains(printed, kind) {
+			t.Errorf("prompt missing kind %q; got:\n%s", kind, printed)
+		}
+	}
+
+	cfg, err := run.LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", cfg.Agent)
+	}
+}
+
+func TestInit_ttyInvalidKindDoesNotWriteShipfile(t *testing.T) {
+	dir := t.TempDir()
+	var out strings.Builder
+
+	created, err := (run.Init{
+		In:  strings.NewReader("opencode\n"),
+		Out: &out,
+		IsTerminal: func() bool {
+			return true
+		},
+	}).Config(dir)
+	if err == nil {
+		t.Fatal("Init.Config: want error for invalid kind")
+	}
+	if created {
+		t.Fatal("Init.Config: want created=false on invalid kind")
+	}
+	if _, statErr := os.Stat(shipConfigPath(dir)); !os.IsNotExist(statErr) {
+		t.Fatalf("Shipfile should not exist after invalid kind; stat=%v", statErr)
+	}
+}
+
+func initNonTTY(dir string) (bool, error) {
+	return (run.Init{
+		IsTerminal: func() bool { return false },
+	}).Config(dir)
+}
+
 func TestInitConfig_writesFilledDefaults(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := run.InitConfig(dir)
+	created, err := initNonTTY(dir)
 	if err != nil {
 		t.Fatalf("InitConfig: %v", err)
 	}
@@ -44,7 +136,7 @@ func TestInitConfig_writesFilledDefaults(t *testing.T) {
 	for _, want := range []string{
 		"branch:",
 		"feature:",
-		"agent: agent",
+		"agent: cursor",
 		"model:",
 		"max_iterations: 10",
 		"timeout: 20m",
@@ -61,7 +153,7 @@ func TestInitConfig_alreadyExistsDoesNotOverwrite(t *testing.T) {
 	original := "branch: keep-me\n"
 	writeShipConfig(t, dir, original)
 
-	created, err := run.InitConfig(dir)
+	created, err := initNonTTY(dir)
 	if err != nil {
 		t.Fatalf("InitConfig: %v", err)
 	}
@@ -82,7 +174,7 @@ func TestLoadConfig_readsAllFields(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: feat/widget
 feature: widget
-agent: cursor-agent
+agent: pi
 model: composer
 max_iterations: 3
 timeout: 5m
@@ -99,8 +191,8 @@ timeout: 5m
 	if cfg.Feature != "widget" {
 		t.Errorf("Feature = %q, want widget", cfg.Feature)
 	}
-	if cfg.Agent != "cursor-agent" {
-		t.Errorf("Agent = %q, want cursor-agent", cfg.Agent)
+	if cfg.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", cfg.Agent)
 	}
 	if cfg.Model != "composer" {
 		t.Errorf("Model = %q, want composer", cfg.Model)
@@ -117,7 +209,7 @@ func TestLoadConfig_missingKeyErrors(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: ""
 feature: ""
-agent: agent
+agent: cursor
 model: ""
 timeout: 10m
 `
@@ -136,7 +228,7 @@ func TestLoadConfig_ignoresUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: ""
 feature: ""
-agent: agent
+agent: cursor
 model: ""
 max_iterations: 10
 timeout: 10m
@@ -148,21 +240,21 @@ extra_thing: ignored
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Agent != "agent" {
-		t.Errorf("Agent = %q, want agent", cfg.Agent)
+	if cfg.Agent != "cursor" {
+		t.Errorf("Agent = %q, want cursor", cfg.Agent)
 	}
 }
 
 func TestInitConfig_roundTripLoadable(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := run.InitConfig(dir); err != nil {
+	if _, err := initNonTTY(dir); err != nil {
 		t.Fatalf("InitConfig: %v", err)
 	}
 	cfg, err := run.LoadConfig(dir)
 	if err != nil {
 		t.Fatalf("LoadConfig after Init: %v", err)
 	}
-	if cfg.Agent != "agent" || cfg.MaxIterations != 10 || cfg.Timeout != 20*time.Minute {
+	if cfg.Agent != "cursor" || cfg.MaxIterations != 10 || cfg.Timeout != 20*time.Minute {
 		t.Errorf("unexpected defaults after init: %+v", cfg)
 	}
 }
