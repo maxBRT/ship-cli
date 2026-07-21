@@ -6,12 +6,15 @@ import (
 )
 
 // New returns the Agent Port for kind. cursor uses the default agent binary on
-// PATH. Other supported kinds error until their adapters land.
+// PATH; pi uses the default pi binary on PATH. Other supported kinds error
+// until their adapters land.
 func New(kind string) (Port, error) {
 	switch kind {
 	case "cursor":
 		return Cursor{}, nil
-	case "pi", "codex", "claude":
+	case "pi":
+		return Pi{}, nil
+	case "codex", "claude":
 		return nil, fmt.Errorf("agent kind %q: adapter not implemented yet", kind)
 	default:
 		return nil, fmt.Errorf("unknown agent kind %q", kind)

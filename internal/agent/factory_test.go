@@ -34,12 +34,40 @@ func TestNew_cursorReturnsPortUsingAgentOnPATH(t *testing.T) {
 	assertHasFlag(t, capture.args(t), "-p")
 }
 
-func TestNew_unimplementedKindErrors(t *testing.T) {
-	_, err := agent.New("pi")
-	if err == nil {
-		t.Fatal("New(pi): want error until adapter lands")
+func TestNew_piReturnsPortUsingPiOnPATH(t *testing.T) {
+	bin, capture := writeFakeAgent(t, fakeAgentConfig{
+		exitCode: 0,
+		stdout:   `{"type":"agent_end","messages":[]}` + "\n",
+	})
+	piBin := filepath.Join(filepath.Dir(bin), "pi")
+	if err := os.Rename(bin, piBin); err != nil {
+		t.Fatalf("rename fake to pi: %v", err)
 	}
-	if !strings.Contains(err.Error(), "pi") {
+	t.Setenv("PATH", filepath.Dir(piBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	port, err := agent.New("pi")
+	if err != nil {
+		t.Fatalf("New(pi): %v", err)
+	}
+
+	err = port.RunPhase(context.Background(), agent.PhaseRequest{
+		Prompt:    "implement",
+		Workspace: t.TempDir(),
+		Timeout:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	assertHasFlag(t, capture.args(t), "--no-session")
+	assertHasFlag(t, capture.args(t), "--approve")
+}
+
+func TestNew_unimplementedKindErrors(t *testing.T) {
+	_, err := agent.New("codex")
+	if err == nil {
+		t.Fatal("New(codex): want error until adapter lands")
+	}
+	if !strings.Contains(err.Error(), "codex") {
 		t.Errorf("error should name kind; got %v", err)
 	}
 }
@@ -60,6 +88,19 @@ func TestRequireOnPATH_failsWhenDefaultBinaryMissing(t *testing.T) {
 		t.Fatal("RequireOnPATH(cursor): want error when agent missing")
 	}
 	if !strings.Contains(err.Error(), "agent") {
+		t.Errorf("error should mention default binary; got %v", err)
+	}
+}
+
+func TestRequireOnPATH_failsWhenPiBinaryMissing(t *testing.T) {
+	empty := t.TempDir()
+	t.Setenv("PATH", empty)
+
+	err := agent.RequireOnPATH("pi")
+	if err == nil {
+		t.Fatal("RequireOnPATH(pi): want error when pi missing")
+	}
+	if !strings.Contains(err.Error(), "pi") {
 		t.Errorf("error should mention default binary; got %v", err)
 	}
 }
