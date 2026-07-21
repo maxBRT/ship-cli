@@ -7,9 +7,9 @@ import (
 	"github.com/maxBRT/ship-cli/internal/observe"
 )
 
-func TestObserver_EndPhase_dumpsToolOneLiners(t *testing.T) {
-	// Worked example: same curated tool fields as Phase logs (name,
-	// duration_ms, status); terminal presentation is one line each.
+func TestObserver_EndPhase_dumpsOneToolsAndTokensLine(t *testing.T) {
+	// Terminal dump is one high-signal line: tool total plus tokens.
+	// Per-tool detail stays in the Phase JSON log only.
 	var out strings.Builder
 	obs := observe.New(t.TempDir(), &out)
 
@@ -26,32 +26,6 @@ func TestObserver_EndPhase_dumpsToolOneLiners(t *testing.T) {
 		DurationMS: 7,
 		Status:     observe.ToolError,
 	})
-	obs.EndPhase()
-
-	got := out.String()
-	wantLines := []string{
-		"tool  Read  42ms  ok",
-		"tool  Write  7ms  error",
-	}
-	for _, want := range wantLines {
-		if !strings.Contains(got, want) {
-			t.Errorf("dump missing %q; got:\n%s", want, got)
-		}
-	}
-}
-
-func TestObserver_EndPhase_dumpsPhaseTokenTotals(t *testing.T) {
-	// Same curated token fields as phase_end in Phase logs; one terminal line.
-	var out strings.Builder
-	obs := observe.New(t.TempDir(), &out)
-
-	sink := obs.BeginPhase("Review")
-	sink.Emit(observe.Event{
-		Kind:       observe.KindTool,
-		Name:       "Shell",
-		DurationMS: 10,
-		Status:     observe.ToolOK,
-	})
 	sink.Emit(observe.Event{
 		Kind:    observe.KindPhaseEnd,
 		Outcome: observe.OutcomeSuccess,
@@ -65,18 +39,45 @@ func TestObserver_EndPhase_dumpsPhaseTokenTotals(t *testing.T) {
 	obs.EndPhase()
 
 	got := out.String()
-	if !strings.Contains(got, "tool  Shell  10ms  ok") {
-		t.Errorf("dump missing tool line; got:\n%s", got)
+	want := "tools  2  tokens  input=120 output=45 cache_read=10 cache_write=2\n"
+	if got != want {
+		t.Errorf("dump = %q, want %q", got, want)
 	}
-	wantTokens := "tokens  input=120 output=45 cache_read=10 cache_write=2"
-	if !strings.Contains(got, wantTokens) {
-		t.Errorf("dump missing %q; got:\n%s", wantTokens, got)
+	if strings.Contains(got, "tool  Read") || strings.Contains(got, "tool  Write") {
+		t.Errorf("dump must not list per-tool lines; got:\n%s", got)
+	}
+}
+
+func TestObserver_EndPhase_toolsOnlyWhenUsageAbsent(t *testing.T) {
+	var out strings.Builder
+	obs := observe.New(t.TempDir(), &out)
+
+	sink := obs.BeginPhase("Final")
+	sink.Emit(observe.Event{
+		Kind:       observe.KindTool,
+		Name:       "Shell",
+		DurationMS: 3,
+		Status:     observe.ToolOK,
+	})
+	sink.Emit(observe.Event{
+		Kind:    observe.KindPhaseEnd,
+		Outcome: observe.OutcomeSuccess,
+	})
+	obs.EndPhase()
+
+	got := out.String()
+	want := "tools  1\n"
+	if got != want {
+		t.Errorf("dump = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "tokens") {
+		t.Errorf("dump = %q, want no tokens when usage absent", got)
 	}
 }
 
 func TestObserver_Emit_doesNotWriteUntilEndPhase(t *testing.T) {
 	// Throbber stays the only live UI during the Phase: buffered Emit must
-	// not interleave tool lines before EndPhase.
+	// not interleave dump lines before EndPhase.
 	var out strings.Builder
 	obs := observe.New(t.TempDir(), &out)
 
@@ -92,35 +93,8 @@ func TestObserver_Emit_doesNotWriteUntilEndPhase(t *testing.T) {
 	}
 
 	obs.EndPhase()
-	if !strings.Contains(out.String(), "tool  Read  42ms  ok") {
-		t.Errorf("after EndPhase dump missing tool line; got:\n%s", out.String())
-	}
-}
-
-func TestObserver_EndPhase_omitsTokensLineWhenUsageAbsent(t *testing.T) {
-	var out strings.Builder
-	obs := observe.New(t.TempDir(), &out)
-
-	sink := obs.BeginPhase("Final")
-	sink.Emit(observe.Event{
-		Kind:       observe.KindTool,
-		Name:       "Shell",
-		DurationMS: 3,
-		Status:     observe.ToolOK,
-	})
-	sink.Emit(observe.Event{
-		Kind:    observe.KindPhaseEnd,
-		Outcome: observe.OutcomeSuccess,
-		// Tokens absent: degrade gracefully — no tokens line.
-	})
-	obs.EndPhase()
-
-	got := out.String()
-	if !strings.Contains(got, "tool  Shell  3ms  ok") {
-		t.Errorf("dump missing tool line; got:\n%s", got)
-	}
-	if strings.Contains(got, "tokens") {
-		t.Errorf("dump = %q, want no tokens line when usage absent", got)
+	if got := out.String(); got != "tools  1\n" {
+		t.Errorf("after EndPhase dump = %q, want tools  1\\n", got)
 	}
 }
 

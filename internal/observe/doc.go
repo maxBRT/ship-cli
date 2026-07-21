@@ -1,5 +1,5 @@
 // Package observe defines curated Run observability events, the Sink Agent
 // adapters emit into, and the Run-owned Observer that writes Phase logs under
-// .ship/runs, dumps high-signal terminal one-liners after each Phase, and
+// .ship/runs, dumps one high-signal tools+tokens line after each Phase, and
 // prints an Abort banner with report paths and last tools on Phase failure.
 package observe
