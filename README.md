@@ -39,6 +39,8 @@ It is recommended to run ship in a seperate worktree. I personnaly use [treehous
 curl -fsSL https://raw.githubusercontent.com/maxBRT/ship-cli/main/install.sh | bash
 ```
 
+The script detects linux/darwin × amd64/arm64, downloads the latest GitHub Release, verifies checksums, and installs `ship` to `~/.local/bin` (or a writable system bin).
+
 #### Windows
 
 Download a binary from [Releases](https://github.com/maxBRT/ship-cli/releases).
@@ -80,8 +82,16 @@ One-off overrides:
 ```bash
 ship --agent pi --model gpt-5 --max-iterations 3 --branch ship/my-feature --timeout 30m
 ```
+Useful flags:
 
-Run `ship --help` for flags and commands (`init`, `update`, `--version`).
+```bash
+ship --agent cursor          # cursor | pi | codex | claude (default: cursor)
+ship --model <name>          # optional model for that agent
+ship --max-iterations 5      # cap tickets this run before Final
+ship --branch ship/my-feature
+```
+
+Run `ship --help` for all flags, env vars, and commands (`init`, `update`, `--version`).
 
 ## Install from source
 
