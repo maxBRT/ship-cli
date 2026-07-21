@@ -1,4 +1,6 @@
-# Ship
+[![CI](https://github.com/maxBRT/ship-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/maxBRT/ship-cli/actions/workflows/ci.yml)
+
+# Ship 🚀
 
 Ship turns labeled GitHub issues into a pull request by driving **your** local coding agent through a fixed sequence of phases.
 
