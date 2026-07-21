@@ -109,6 +109,9 @@ func TestMain_versionPrintsEmbeddedVersion(t *testing.T) {
 	got := strings.TrimSpace(stdout.String())
 	if got != "dev" {
 		t.Errorf("version = %q, want %q", got, "dev")
+	}
+}
+
 func TestMain_helpDescribesAgentAsKind(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{"--help"}, &stdout, &stderr, t.TempDir())

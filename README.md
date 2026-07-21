@@ -4,7 +4,7 @@ A CLI that runs agents sequentially.
 
 Confirm a queue from ship-labeled GitHub issues, then spin agents through an Implement → Review loop for each of the tickets and open a pull request.
 
-**Status:** v0.0.1 (experimental).
+**Status:** v0.1.0.
 
 ## Install
 
