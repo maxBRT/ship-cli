@@ -15,6 +15,7 @@ import (
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
+	"github.com/maxBRT/ship-cli/internal/herdr"
 	"github.com/maxBRT/ship-cli/internal/observe"
 	"github.com/maxBRT/ship-cli/internal/run"
 	"github.com/maxBRT/ship-cli/internal/throbber"
@@ -131,6 +132,87 @@ func TestRun_wrapsEachPhaseInThrobberDuring(t *testing.T) {
 	}
 	if len(ag.reqs) != 3 {
 		t.Fatalf("agent called %d times, want 3", len(ag.reqs))
+	}
+}
+
+func TestRun_reportsWorkingThenIdleAroundEachPhase(t *testing.T) {
+	// Under a multiplexer Port, each Phase must show working for its full
+	// duration and return to idle when it ends — independent of screen cues.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 1, Title: "one"}}}
+	prs := &fakePRs{}
+	rep := &recordingHerdr{}
+	ag := &fakeAgent{handler: func(idx int, req agent.PhaseRequest) error {
+		if len(rep.states) == 0 || rep.states[len(rep.states)-1] != "working" {
+			t.Fatalf("phase %d: last report = %v, want working during Agent work", idx, rep.states)
+		}
+		if isFinalPrompt(req.Prompt) {
+			prs.openPR("ship/run")
+			return nil
+		}
+		if idx == 1 {
+			writeAndCommit(t, req.Workspace, "impl.txt", "work\n", "implement")
+		}
+		return nil
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		PRs:     prs,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Herdr:   rep,
+		Stdout:  &strings.Builder{},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []string{
+		"working", "idle", // Implement
+		"working", "idle", // Review
+		"working", "idle", // Final
+	}
+	if !slices.Equal(rep.states, want) {
+		t.Errorf("herdr states = %v, want %v", rep.states, want)
+	}
+	if len(rep.messages) != 3 {
+		t.Fatalf("working messages = %d, want 3", len(rep.messages))
+	}
+	for i, msg := range rep.messages {
+		if msg == "" {
+			t.Errorf("working message %d is empty", i)
+		}
+	}
+}
+
+func TestRun_reportsIdleWhenPhaseFails(t *testing.T) {
+	// Abort / timeout paths must still release the multiplexer to idle so the
+	// Agents sidebar does not stick on working after Ship stops.
+	dir := initTempRepo(t)
+	tickets := &fakeTickets{ready: []ticket.Ticket{{Number: 7, Title: "seven"}}}
+	rep := &recordingHerdr{}
+	ag := &fakeAgent{handler: func(int, agent.PhaseRequest) error {
+		return errors.New("agent boom")
+	}}
+
+	r := run.Orchestrator{
+		Tickets: tickets,
+		Agent:   ag,
+		Repo:    gitops.Repo{Dir: dir},
+		Config:  run.Config{Branch: "ship/run", MaxIterations: 10},
+		Herdr:   rep,
+		Stdout:  &strings.Builder{},
+	}
+	err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run: want Abort error when a Phase fails")
+	}
+
+	want := []string{"working", "idle"}
+	if !slices.Equal(rep.states, want) {
+		t.Errorf("herdr states = %v, want %v (idle even on failure)", rep.states, want)
 	}
 }
 
@@ -1219,6 +1301,23 @@ func (r *recordingThrobber) During(ctx context.Context, status throbber.Status, 
 	r.phases = append(r.phases, status.Phase)
 	r.workCalls++
 	return work(ctx)
+}
+
+// recordingHerdr records multiplexer agent-state reports around Phases.
+type recordingHerdr struct {
+	states   []string
+	messages []string
+}
+
+var _ herdr.Port = (*recordingHerdr)(nil)
+
+func (r *recordingHerdr) Working(_ context.Context, message string) {
+	r.states = append(r.states, "working")
+	r.messages = append(r.messages, message)
+}
+
+func (r *recordingHerdr) Idle(context.Context) {
+	r.states = append(r.states, "idle")
 }
 
 // fakeQueue is the injectable picker/queue port for Orchestrator tests.
