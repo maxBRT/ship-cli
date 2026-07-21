@@ -30,29 +30,7 @@ func TestInstallScript_installsShipIntoBinDir(t *testing.T) {
 	ver := "1.0.0"
 	asset := archiveName(ver, goos, goarch)
 	sums := checksumLine(sha256Sum(archiveBytes), asset)
-
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
-			fmt.Fprintf(w, `{
-				"tag_name":"v%s",
-				"assets":[
-					{"name":%q,"browser_download_url":%q},
-					{"name":%q,"browser_download_url":%q}
-				]
-			}`, ver, asset, srvURL+"/download/"+asset,
-				fmt.Sprintf("ship-cli_%s_checksums.txt", ver), srvURL+"/download/checksums.txt")
-		case r.URL.Path == "/download/"+asset:
-			_, _ = w.Write(archiveBytes)
-		case r.URL.Path == "/download/checksums.txt":
-			_, _ = io.WriteString(w, sums)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	srvURL = srv.URL
+	srv := newReleaseServer(t, ver, asset, archiveBytes, sums)
 
 	script := filepath.Join("..", "install.sh")
 	cmd := exec.Command("bash", script)
@@ -117,6 +95,7 @@ func TestInstallScript_selectsAssetForLinuxDarwinAmd64Arm64(t *testing.T) {
 			ver := "3.1.4"
 			asset := archiveName(ver, p.os, p.arch)
 			sums := checksumLine(sha256Sum(archiveBytes), asset)
+			sumsName := fmt.Sprintf("ship-cli_%s_checksums.txt", ver)
 
 			var srvURL string
 			var downloaded string
@@ -128,20 +107,14 @@ func TestInstallScript_selectsAssetForLinuxDarwinAmd64Arm64(t *testing.T) {
 					var assets []string
 					for _, q := range platforms {
 						name := archiveName(ver, q.os, q.arch)
-						assets = append(assets, fmt.Sprintf(
-							`{"name":%q,"browser_download_url":%q}`,
-							name, srvURL+"/download/"+name,
-						))
+						assets = append(assets, githubAssetJSON(name, srvURL+"/download/"+name))
 					}
-					assets = append(assets, fmt.Sprintf(
-						`{"name":%q,"browser_download_url":%q}`,
-						fmt.Sprintf("ship-cli_%s_checksums.txt", ver),
-						srvURL+"/download/"+fmt.Sprintf("ship-cli_%s_checksums.txt", ver),
-					))
-					fmt.Fprintf(w, `{"tag_name":"v%s","assets":[%s]}`, ver, strings.Join(assets, ","))
+					assets = append(assets, githubAssetJSON(sumsName, srvURL+"/download/"+sumsName))
+					fmt.Fprintf(w, `{"url":"https://api.github.com/repos/maxBRT/ship-cli/releases/1","tag_name":"v%s","name":"v%s","assets":[%s]}`,
+						ver, ver, strings.Join(assets, ","))
 				case strings.HasPrefix(r.URL.Path, "/download/"):
 					name := strings.TrimPrefix(r.URL.Path, "/download/")
-					if name == fmt.Sprintf("ship-cli_%s_checksums.txt", ver) {
+					if name == sumsName {
 						_, _ = io.WriteString(w, sums)
 						return
 					}
@@ -198,29 +171,7 @@ func TestInstallScript_defaultsToUserLocalBin(t *testing.T) {
 	ver := "1.0.0"
 	asset := archiveName(ver, goos, goarch)
 	sums := checksumLine(sha256Sum(archiveBytes), asset)
-
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
-			fmt.Fprintf(w, `{
-				"tag_name":"v%s",
-				"assets":[
-					{"name":%q,"browser_download_url":%q},
-					{"name":%q,"browser_download_url":%q}
-				]
-			}`, ver, asset, srvURL+"/download/"+asset,
-				fmt.Sprintf("ship-cli_%s_checksums.txt", ver), srvURL+"/download/checksums.txt")
-		case r.URL.Path == "/download/"+asset:
-			_, _ = w.Write(archiveBytes)
-		case r.URL.Path == "/download/checksums.txt":
-			_, _ = io.WriteString(w, sums)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	srvURL = srv.URL
+	srv := newReleaseServer(t, ver, asset, archiveBytes, sums)
 
 	script := filepath.Join("..", "install.sh")
 	cmd := exec.Command("bash", script)
@@ -258,13 +209,11 @@ func TestInstallScript_rejectsNonHTTPSDownloadURL(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprintf(w, `{
-			"tag_name":"v%s",
-			"assets":[
-				{"name":%q,"browser_download_url":"http://example.com/download/%s"},
-				{"name":%q,"browser_download_url":"http://example.com/download/checksums.txt"}
-			]
-		}`, ver, asset, asset, sumsName)
+		fmt.Fprintf(w, `{"tag_name":"v%s","name":"v%s","assets":[%s,%s]}`,
+			ver, ver,
+			githubAssetJSON(asset, "http://example.com/download/"+asset),
+			githubAssetJSON(sumsName, "http://example.com/download/checksums.txt"),
+		)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -317,29 +266,7 @@ func TestInstallScript_warnsWhenInstallDirNotOnPATH(t *testing.T) {
 	ver := "1.0.0"
 	asset := archiveName(ver, goos, goarch)
 	sums := checksumLine(sha256Sum(archiveBytes), asset)
-
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
-			fmt.Fprintf(w, `{
-				"tag_name":"v%s",
-				"assets":[
-					{"name":%q,"browser_download_url":%q},
-					{"name":%q,"browser_download_url":%q}
-				]
-			}`, ver, asset, srvURL+"/download/"+asset,
-				fmt.Sprintf("ship-cli_%s_checksums.txt", ver), srvURL+"/download/checksums.txt")
-		case r.URL.Path == "/download/"+asset:
-			_, _ = w.Write(archiveBytes)
-		case r.URL.Path == "/download/checksums.txt":
-			_, _ = io.WriteString(w, sums)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	srvURL = srv.URL
+	srv := newReleaseServer(t, ver, asset, archiveBytes, sums)
 
 	// PATH deliberately excludes binDir.
 	script := filepath.Join("..", "install.sh")
@@ -399,29 +326,7 @@ func TestInstallScript_checksumMismatchDoesNotInstall(t *testing.T) {
 	ver := "1.0.0"
 	asset := archiveName(ver, goos, goarch)
 	badSums := checksumLine(sha256Sum([]byte("not-the-archive")), asset)
-
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
-			fmt.Fprintf(w, `{
-				"tag_name":"v%s",
-				"assets":[
-					{"name":%q,"browser_download_url":%q},
-					{"name":%q,"browser_download_url":%q}
-				]
-			}`, ver, asset, srvURL+"/download/"+asset,
-				fmt.Sprintf("ship-cli_%s_checksums.txt", ver), srvURL+"/download/checksums.txt")
-		case r.URL.Path == "/download/"+asset:
-			_, _ = w.Write(archiveBytes)
-		case r.URL.Path == "/download/checksums.txt":
-			_, _ = io.WriteString(w, badSums)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	srvURL = srv.URL
+	srv := newReleaseServer(t, ver, asset, archiveBytes, badSums)
 
 	script := filepath.Join("..", "install.sh")
 	cmd := exec.Command("bash", script)
@@ -454,6 +359,62 @@ func supportedPlatform(goos, goarch string) bool {
 	default:
 		return false
 	}
+}
+
+// githubAssetJSON mirrors the GitHub Releases API shape: "name" appears before a
+// nested "uploader" object, and "browser_download_url" comes after it.
+func githubAssetJSON(name, downloadURL string) string {
+	return fmt.Sprintf(`{
+		"url":"https://api.github.com/repos/maxBRT/ship-cli/releases/assets/1",
+		"id":1,
+		"node_id":"RA_test",
+		"name":%q,
+		"label":"",
+		"uploader":{
+			"login":"releaser",
+			"id":1,
+			"node_id":"U_test",
+			"avatar_url":"https://example.test/a",
+			"gravatar_id":"",
+			"url":"https://api.github.com/users/releaser",
+			"html_url":"https://github.com/releaser",
+			"type":"User",
+			"site_admin":false
+		},
+		"content_type":"application/gzip",
+		"state":"uploaded",
+		"size":1,
+		"digest":null,
+		"download_count":0,
+		"created_at":"2026-01-01T00:00:00Z",
+		"updated_at":"2026-01-01T00:00:00Z",
+		"browser_download_url":%q
+	}`, name, downloadURL)
+}
+
+func newReleaseServer(t *testing.T, ver, asset string, archive []byte, sums string) *httptest.Server {
+	t.Helper()
+	sumsName := fmt.Sprintf("ship-cli_%s_checksums.txt", ver)
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/maxBRT/ship-cli/releases/latest":
+			fmt.Fprintf(w, `{"url":"https://api.github.com/repos/maxBRT/ship-cli/releases/1","tag_name":"v%s","name":"v%s","assets":[%s,%s]}`,
+				ver, ver,
+				githubAssetJSON(asset, srvURL+"/download/"+asset),
+				githubAssetJSON(sumsName, srvURL+"/download/checksums.txt"),
+			)
+		case r.URL.Path == "/download/"+asset:
+			_, _ = w.Write(archive)
+		case r.URL.Path == "/download/checksums.txt":
+			_, _ = io.WriteString(w, sums)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	srvURL = srv.URL
+	return srv
 }
 
 func makeTarGz(t *testing.T, name string, contents []byte) []byte {

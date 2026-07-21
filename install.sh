@@ -69,6 +69,41 @@ sha256_file() {
   fi
 }
 
+# GitHub embeds a nested "uploader" object between "name" and "browser_download_url",
+# often across multiple lines. Flatten newlines, find the matching name, then take the
+# first browser_download_url after it.
+release_asset_url() {
+  local json="$1" name="$2"
+  printf '%s' "$json" | tr '\n' ' ' | awk -v name="$name" '
+    BEGIN {
+      needle1 = "\"name\":\"" name "\""
+      needle2 = "\"name\": \"" name "\""
+    }
+    {
+      line = $0
+      idx = index(line, needle1)
+      if (idx == 0) idx = index(line, needle2)
+      if (idx == 0) next
+      rest = substr(line, idx)
+      if (match(rest, /"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+        m = substr(rest, RSTART, RLENGTH)
+        sub(/^"browser_download_url"[[:space:]]*:[[:space:]]*"/, "", m)
+        sub(/"$/, "", m)
+        print m
+        exit
+      }
+    }
+  '
+}
+
+require_https_url() {
+  case "$1" in
+    https://*|http://127.*|http://localhost*|http://\[::1\]*) ;;
+    http://*) err "download URL must use HTTPS" ;;
+    *) ;;
+  esac
+}
+
 main() {
   need_cmd curl
   need_cmd tar
@@ -94,32 +129,13 @@ main() {
   sums_name="ship-cli_${ver}_checksums.txt"
 
   local asset_url sums_url
-  asset_url="$(printf '%s' "$release_json" | sed -n "s/.*\"name\"[[:space:]]*:[[:space:]]*\"${asset}\"[[:space:]]*,[[:space:]]*\"browser_download_url\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1)"
-  # Prefer parsing assets more carefully with a second pass if sed failed on order
-  if [[ -z "$asset_url" ]]; then
-    asset_url="$(printf '%s' "$release_json" | tr '{' '\n' | grep -F "\"name\":\"${asset}\"" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  fi
-  if [[ -z "$asset_url" ]]; then
-    asset_url="$(printf '%s' "$release_json" | tr '{' '\n' | grep -F "\"name\": \"${asset}\"" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  fi
+  asset_url="$(release_asset_url "$release_json" "$asset")"
   [[ -n "$asset_url" ]] || err "no release asset named ${asset} (unsupported platform or incomplete release)"
-
-  sums_url="$(printf '%s' "$release_json" | tr '{' '\n' | grep -F "\"name\":\"${sums_name}\"" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  if [[ -z "$sums_url" ]]; then
-    sums_url="$(printf '%s' "$release_json" | tr '{' '\n' | grep -F "\"name\": \"${sums_name}\"" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  fi
+  sums_url="$(release_asset_url "$release_json" "$sums_name")"
   [[ -n "$sums_url" ]] || err "no checksums asset named ${sums_name}"
 
-  case "$asset_url" in
-    https://*|http://127.*|http://localhost*|http://\[::1\]*) ;;
-    http://*) err "download URL must use HTTPS" ;;
-    *) ;;
-  esac
-  case "$sums_url" in
-    https://*|http://127.*|http://localhost*|http://\[::1\]*) ;;
-    http://*) err "download URL must use HTTPS" ;;
-    *) ;;
-  esac
+  require_https_url "$asset_url"
+  require_https_url "$sums_url"
 
   archive="${tmp}/${asset}"
   sums="${tmp}/checksums.txt"
