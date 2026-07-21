@@ -1,7 +1,10 @@
 package run
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +22,19 @@ func shipConfigPath(dir string) string {
 	return filepath.Join(dir, shipDir, shipConfigFile)
 }
 
-// InitConfig writes .ship/config.yaml with filled defaults.
+// Init creates .ship/config.yaml. On a TTY it lists Agent kinds and reads a
+// typed choice; otherwise it records agent: cursor with no prompt.
+type Init struct {
+	In  io.Reader // optional; default os.Stdin
+	Out io.Writer // optional; default os.Stderr
+	// IsTerminal reports whether an interactive session is available.
+	// Optional; default requires stdin and stderr to be character devices.
+	IsTerminal func() bool
+}
+
+// Config writes .ship/config.yaml with filled defaults and the chosen Agent kind.
 // If the file already exists, created is false and the file is not overwritten.
-func InitConfig(dir string) (created bool, err error) {
+func (i Init) Config(dir string) (created bool, err error) {
 	path := shipConfigPath(dir)
 	_, err = os.Stat(path)
 	switch {
@@ -29,6 +42,13 @@ func InitConfig(dir string) (created bool, err error) {
 		return false, nil
 	case os.IsNotExist(err):
 		cfg := defaultConfig()
+		if i.terminal() {
+			kind, err := i.promptAgentKind()
+			if err != nil {
+				return false, err
+			}
+			cfg.Agent = kind
+		}
 		content := fmt.Sprintf(`branch: %q
 feature: %q
 agent: %s
@@ -46,6 +66,51 @@ timeout: %s
 	default:
 		return false, err
 	}
+}
+
+func (i Init) promptAgentKind() (string, error) {
+	out := i.out()
+	fmt.Fprintln(out, "Choose an Agent kind for this checkout:")
+	fmt.Fprintln(out, "  cursor, pi, codex, claude")
+	fmt.Fprint(out, "> ")
+
+	line, err := bufio.NewReader(i.in()).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read agent kind: %w", err)
+	}
+	kind := strings.TrimSpace(line)
+	if err := validateAgentKind(kind); err != nil {
+		return "", err
+	}
+	return kind, nil
+}
+
+func (i Init) terminal() bool {
+	if i.IsTerminal != nil {
+		return i.IsTerminal()
+	}
+	return isTerminalFile(os.Stdin) && isTerminalFile(os.Stderr)
+}
+
+func (i Init) in() io.Reader {
+	if i.In != nil {
+		return i.In
+	}
+	return os.Stdin
+}
+
+func (i Init) out() io.Writer {
+	if i.Out != nil {
+		return i.Out
+	}
+	return os.Stderr
+}
+
+// InitConfig writes .ship/config.yaml with filled defaults.
+// If the file already exists, created is false and the file is not overwritten.
+// On a TTY it prompts for Agent kind; otherwise it records agent: cursor.
+func InitConfig(dir string) (created bool, err error) {
+	return Init{}.Config(dir)
 }
 
 // LoadConfig reads .ship/config.yaml from dir. Every known key must be present;

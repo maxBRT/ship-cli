@@ -53,7 +53,7 @@ The end-of-run phase where a fresh agent reviews the whole branch, runs tests/e2
 _Avoid_: wrap-up, finalize, PR phase, ship phase
 
 **Agent**:
-The external coding agent that executes a phase (e.g. Cursor). A run uses one agent for every phase.
+The external coding agent that executes a Phase. Supported kinds are `cursor`, `pi`, `codex`, and `claude`. A Run uses one Agent kind for every Phase.
 _Avoid_: backend, runner, harness, model (model is a setting of an agent, not the agent itself)
 
 **Abort**:
