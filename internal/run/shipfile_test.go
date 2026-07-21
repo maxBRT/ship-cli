@@ -135,7 +135,6 @@ func TestInitConfig_writesFilledDefaults(t *testing.T) {
 	got := string(data)
 	for _, want := range []string{
 		"branch:",
-		"feature:",
 		"agent: cursor",
 		"model:",
 		"max_iterations: 10",
@@ -173,7 +172,6 @@ func TestInitConfig_alreadyExistsDoesNotOverwrite(t *testing.T) {
 func TestLoadConfig_readsAllFields(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: feat/widget
-feature: widget
 agent: pi
 model: composer
 max_iterations: 3
@@ -187,9 +185,6 @@ timeout: 5m
 	}
 	if cfg.Branch != "feat/widget" {
 		t.Errorf("Branch = %q, want feat/widget", cfg.Branch)
-	}
-	if cfg.Feature != "widget" {
-		t.Errorf("Feature = %q, want widget", cfg.Feature)
 	}
 	if cfg.Agent != "pi" {
 		t.Errorf("Agent = %q, want pi", cfg.Agent)
@@ -208,7 +203,6 @@ timeout: 5m
 func TestLoadConfig_missingKeyErrors(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: ""
-feature: ""
 agent: cursor
 model: ""
 timeout: 10m
@@ -227,11 +221,11 @@ timeout: 10m
 func TestLoadConfig_ignoresUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: ""
-feature: ""
 agent: cursor
 model: ""
 max_iterations: 10
 timeout: 10m
+feature: leftover
 extra_thing: ignored
 `
 	writeShipConfig(t, dir, content)

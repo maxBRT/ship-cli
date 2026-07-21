@@ -58,7 +58,7 @@ func (r Orchestrator) Run(ctx context.Context) error {
 		return fmt.Errorf("ensure tracker labels: %w", err)
 	}
 
-	ready, err := r.Tickets.ListReady(ctx, r.Config.Feature)
+	ready, err := r.Tickets.ListReady(ctx)
 	if err != nil {
 		return fmt.Errorf("list ship Tickets: %w", err)
 	}

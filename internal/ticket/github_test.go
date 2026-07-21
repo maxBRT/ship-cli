@@ -42,7 +42,7 @@ func TestListReady_ordersByNumberThenCreatedDate(t *testing.T) {
 		}`,
 	})}
 
-	got, err := gh.ListReady(context.Background(), "")
+	got, err := gh.ListReady(context.Background())
 	if err != nil {
 		t.Fatalf("ListReady: %v", err)
 	}
@@ -55,48 +55,6 @@ func TestListReady_ordersByNumberThenCreatedDate(t *testing.T) {
 		if got[i].Number != n {
 			t.Fatalf("ListReady[%d].Number=%d, want %d (full=%v)", i, got[i].Number, n, numbers(got))
 		}
-	}
-}
-
-func TestListReady_filtersByFeatureLabel(t *testing.T) {
-	gh := &ticket.GitHub{Exec: scriptedExec(t, map[string]string{
-		"repo view --json nameWithOwner": `{"nameWithOwner":"maxBRT/ship-cli"}`,
-		"api graphql": `{
-			"data": {
-				"repository": {
-					"issues": {
-						"nodes": [
-							{
-								"number": 10,
-								"title": "other feature",
-								"createdAt": "2026-01-01T00:00:00Z",
-								"labels": {"nodes": [
-									{"name": "ship"},
-									{"name": "feat-other"}
-								]}
-							},
-							{
-								"number": 11,
-								"title": "wanted feature",
-								"createdAt": "2026-02-01T00:00:00Z",
-								"labels": {"nodes": [
-									{"name": "ship"},
-									{"name": "feat-ship"}
-								]}
-							}
-						]
-					}
-				}
-			}
-		}`,
-	})}
-
-	got, err := gh.ListReady(context.Background(), "feat-ship")
-	if err != nil {
-		t.Fatalf("ListReady: %v", err)
-	}
-	if len(got) != 1 || got[0].Number != 11 {
-		t.Fatalf("ListReady = %v, want only #11", numbers(got))
 	}
 }
 
