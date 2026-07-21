@@ -56,20 +56,11 @@ func (l Line) During(ctx context.Context, status Status, work func(context.Conte
 }
 
 func formatStatus(s Status, spin rune) string {
-	var parts []string
-	if s.Iteration > 0 {
-		parts = append(parts, fmt.Sprintf("Iteration %d", s.Iteration))
-	}
-	if s.Phase != "" {
-		parts = append(parts, s.Phase)
-	}
-	if s.Ticket != "" {
-		parts = append(parts, s.Ticket)
-	}
-	if len(parts) == 0 {
+	label := s.Label()
+	if label == "" {
 		return string(spin)
 	}
-	return fmt.Sprintf("%c  %s", spin, strings.Join(parts, " · "))
+	return fmt.Sprintf("%c  %s", spin, label)
 }
 
 func finishLine(status Status, color, ok bool, d time.Duration) string {

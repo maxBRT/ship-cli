@@ -6,10 +6,11 @@ import (
 	"os/exec"
 )
 
-// Source and Agent identify Ship's lifecycle reports to Herdr.
+// Source and AgentID identify Ship's lifecycle reports to Herdr.
+// AgentID is the Herdr --agent value for Ship-the-product, not the coding Agent port.
 const (
-	Source = "ship:run"
-	Agent  = "ship"
+	Source  = "ship:run"
+	AgentID = "ship"
 )
 
 // Exec runs the herdr CLI with the given args. Tests inject a fake; nil means
@@ -47,7 +48,7 @@ func (r Reporter) report(ctx context.Context, state, message string) {
 	args := []string{
 		"pane", "report-agent", paneID,
 		"--source", Source,
-		"--agent", Agent,
+		"--agent", AgentID,
 		"--state", state,
 	}
 	if message != "" {

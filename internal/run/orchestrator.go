@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/maxBRT/ship-cli/internal/agent"
 	"github.com/maxBRT/ship-cli/internal/gitops"
@@ -197,7 +196,7 @@ func (r Orchestrator) runPhase(ctx context.Context, status throbber.Status, prom
 		events = r.Observer.BeginPhase(status.Phase)
 	}
 	if r.Herdr != nil {
-		r.Herdr.Working(ctx, phaseReportMessage(status))
+		r.Herdr.Working(ctx, status.Label())
 		defer r.Herdr.Idle(ctx)
 	}
 	work := func(ctx context.Context) error {
@@ -223,20 +222,6 @@ func (r Orchestrator) runPhase(ctx context.Context, status throbber.Status, prom
 		}
 	}
 	return err
-}
-
-func phaseReportMessage(status throbber.Status) string {
-	var parts []string
-	if status.Iteration > 0 {
-		parts = append(parts, fmt.Sprintf("Iteration %d", status.Iteration))
-	}
-	if status.Phase != "" {
-		parts = append(parts, status.Phase)
-	}
-	if status.Ticket != "" {
-		parts = append(parts, status.Ticket)
-	}
-	return strings.Join(parts, " · ")
 }
 
 func (r Orchestrator) stdout() io.Writer {

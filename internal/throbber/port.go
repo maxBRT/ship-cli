@@ -1,12 +1,32 @@
 package throbber
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 // Status labels a Phase wait: Iteration, Phase, and Ticket when applicable.
 type Status struct {
 	Phase     string // Implement, Review, or Final
 	Iteration int    // 1-based; 0 omits Iteration (Final)
 	Ticket    string // e.g. "#7 one"; empty omits Ticket (Final)
+}
+
+// Label is the human status text without spinner chrome, e.g.
+// "Iteration 2 · Review · #50 Pi Agent adapter". Empty fields are omitted.
+func (s Status) Label() string {
+	var parts []string
+	if s.Iteration > 0 {
+		parts = append(parts, fmt.Sprintf("Iteration %d", s.Iteration))
+	}
+	if s.Phase != "" {
+		parts = append(parts, s.Phase)
+	}
+	if s.Ticket != "" {
+		parts = append(parts, s.Ticket)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Port is the Phase-wait UI surface the Run orchestrator calls.
