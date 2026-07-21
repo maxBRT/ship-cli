@@ -17,17 +17,8 @@ builds:
     ldflags:
       - -s -w -X github.com/maxBRT/ship-cli/internal/version.Version={{.Version}}
 
-archives:
-  - formats: [tar.gz]
-    # GoReleaser-recommended name template (uname-compatible OS/Arch).
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else }}{{ .Arch }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats: [zip]
+# Archives and checksums use GoReleaser defaults (name includes version/os/arch;
+# checksums file is {{ .ProjectName }}_{{ .Version }}_checksums.txt).
 
 changelog:
   sort: asc
