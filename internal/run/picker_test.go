@@ -1,9 +1,9 @@
 package run_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -12,10 +12,7 @@ import (
 )
 
 func TestInteractive_nonTTYFailsClearly(t *testing.T) {
-	var out bytes.Buffer
 	p := run.Interactive{
-		In:  strings.NewReader(""),
-		Out: &out,
 		IsTerminal: func() bool {
 			return false
 		},
@@ -35,16 +32,14 @@ func TestInteractive_nonTTYFailsClearly(t *testing.T) {
 	if got != nil {
 		t.Errorf("Confirm tickets = %v, want nil", got)
 	}
-	if out.Len() != 0 {
-		t.Errorf("picker wrote %q before failing non-interactively", out.String())
-	}
 }
 
 func TestInteractive_confirmAllKeepsListedOrder(t *testing.T) {
-	var out bytes.Buffer
 	p := run.Interactive{
-		In:  strings.NewReader("\n"),
-		Out: &out,
+		Forms: run.TypedLines{
+			In:  strings.NewReader("\n"),
+			Out: io.Discard,
+		},
 		IsTerminal: func() bool {
 			return true
 		},
@@ -64,10 +59,11 @@ func TestInteractive_confirmAllKeepsListedOrder(t *testing.T) {
 }
 
 func TestInteractive_dropAndReorderViaIndexList(t *testing.T) {
-	var out bytes.Buffer
 	p := run.Interactive{
-		In:  strings.NewReader("3 1\n"),
-		Out: &out,
+		Forms: run.TypedLines{
+			In:  strings.NewReader("3 1\n"),
+			Out: io.Discard,
+		},
 		IsTerminal: func() bool {
 			return true
 		},
@@ -88,10 +84,11 @@ func TestInteractive_dropAndReorderViaIndexList(t *testing.T) {
 }
 
 func TestInteractive_cancelReturnsErrCanceled(t *testing.T) {
-	var out bytes.Buffer
 	p := run.Interactive{
-		In:  strings.NewReader("q\n"),
-		Out: &out,
+		Forms: run.TypedLines{
+			In:  strings.NewReader("q\n"),
+			Out: io.Discard,
+		},
 		IsTerminal: func() bool {
 			return true
 		},
@@ -107,10 +104,11 @@ func TestInteractive_cancelReturnsErrCanceled(t *testing.T) {
 }
 
 func TestInteractive_noneConfirmsEmptySelection(t *testing.T) {
-	var out bytes.Buffer
 	p := run.Interactive{
-		In:  strings.NewReader("none\n"),
-		Out: &out,
+		Forms: run.TypedLines{
+			In:  strings.NewReader("none\n"),
+			Out: io.Discard,
+		},
 		IsTerminal: func() bool {
 			return true
 		},

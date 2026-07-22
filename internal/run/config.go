@@ -6,6 +6,9 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/maxBRT/ship-cli/internal/theme"
 )
 
 // Config holds the Run configuration parsed from .ship/config.yaml and flags.
@@ -34,33 +37,63 @@ var knownAgentKinds = map[string]struct{}{
 
 // WriteUsage prints CLI help using Ship domain language.
 func WriteUsage(w io.Writer) {
-	fmt.Fprintf(w, `ship - run a sequential Ticket Run in the current checkout.
+	heading := lipgloss.NewStyle().Foreground(theme.Amber).Bold(true)
+	fmt.Fprintf(w, `%s - run a sequential Ticket Run in the current checkout.
 
 A Run confirms a ship queue from ship-labeled Tickets via an interactive
 picker, processes each through one Iteration (Implement Phase then Review
 Phase), then a Final Phase.
 
-Usage:
+%s
   ship [flags]
   ship init
   ship update
   ship --version
 
-Flags:
-`)
-	defaults := defaultConfig()
-	fs := newFlagSet(&defaults)
-	fs.SetOutput(w)
-	fs.PrintDefaults()
+%s
+`, theme.Brand, heading.Render(theme.Brand+"  Usage"), heading.Render(theme.Brand+"  Flags"))
+	writeFlagColumns(w)
 	fmt.Fprintf(w, `
 Commands:
   init     create .ship/config.yaml with defaults
   update   download the latest GitHub Release and replace this binary
 
-Config:
+%s
   .ship/config.yaml at the checkout root (defaults → YAML → flags).
   Run "ship init" to create one with filled defaults.
-`)
+`, heading.Render(theme.Brand+"  Config"))
+}
+
+func writeFlagColumns(w io.Writer) {
+	defaults := defaultConfig()
+	fs := newFlagSet(&defaults)
+
+	type row struct {
+		name, meaning, def string
+	}
+	var rows []row
+	nameWidth, meaningWidth := 0, 0
+	fs.VisitAll(func(f *flag.Flag) {
+		name := "-" + f.Name
+		r := row{name: name, meaning: f.Usage, def: f.DefValue}
+		rows = append(rows, r)
+		if len(name) > nameWidth {
+			nameWidth = len(name)
+		}
+		if len(f.Usage) > meaningWidth {
+			meaningWidth = len(f.Usage)
+		}
+	})
+
+	nameStyle := lipgloss.NewStyle().Width(nameWidth + 2)
+	meaningStyle := lipgloss.NewStyle().Width(meaningWidth + 2).Foreground(lipgloss.Color("245"))
+	defStyle := lipgloss.NewStyle().Foreground(theme.Green)
+	for _, r := range rows {
+		fmt.Fprint(w, "  ")
+		fmt.Fprint(w, nameStyle.Render(r.name))
+		fmt.Fprint(w, meaningStyle.Render(r.meaning))
+		fmt.Fprintln(w, defStyle.Render(r.def))
+	}
 }
 
 func defaultConfig() Config {

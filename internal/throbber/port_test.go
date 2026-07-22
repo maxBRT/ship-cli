@@ -102,6 +102,30 @@ func TestLine_During_nonTTY_finalOmitsIterationAndTicket(t *testing.T) {
 	}
 }
 
+func TestLine_During_nonTTY_showsQueueRemainingHint(t *testing.T) {
+	var buf bytes.Buffer
+	err := throbber.Line{Out: &buf, Color: false}.During(
+		context.Background(),
+		throbber.Status{
+			Phase:     "Implement",
+			Iteration: 1,
+			Ticket:    "#8 Add throbber",
+			Remaining: "queue remaining · #7 · #9",
+		},
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("During: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "queue remaining") {
+		t.Errorf("output missing queue remaining hint: %q", out)
+	}
+	if !strings.Contains(out, "#7") || !strings.Contains(out, "#9") {
+		t.Errorf("output missing remaining tickets: %q", out)
+	}
+}
+
 func TestLine_During_nonTTY_failureShowsNoCheckmark(t *testing.T) {
 	var buf bytes.Buffer
 	want := errors.New("boom")

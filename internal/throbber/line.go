@@ -35,6 +35,9 @@ func (l Line) During(ctx context.Context, status Status, work func(context.Conte
 
 	if !isTTY(out) {
 		fmt.Fprintf(out, "ship: %s\n", formatStatus(status, '…'))
+		if status.Remaining != "" {
+			fmt.Fprintf(out, "%s\n", status.Remaining)
+		}
 		err := work(ctx)
 		fmt.Fprintln(out, finishLine(status, l.Color, err == nil, time.Since(start)))
 		return err
@@ -50,6 +53,10 @@ func (l Line) During(ctx context.Context, status Status, work func(context.Conte
 	err := work(ctx)
 	stopUI()
 	<-done
+	if status.Remaining != "" {
+		clearLine(out) // hint line
+		fmt.Fprint(out, "\033[1A")
+	}
 	clearLine(out)
 	fmt.Fprintln(out, finishLine(status, l.Color, err == nil, time.Since(start)))
 	return err
@@ -113,13 +120,33 @@ func runLine(ctx context.Context, w io.Writer, status Status, color bool) {
 	defer tick.Stop()
 
 	frame := 0
+	painted := false
 	paint := func() {
 		spin := brailleFrames[frame%len(brailleFrames)]
 		line := formatStatus(status, spin)
 		if color {
 			line = "\033[38;2;230;175;90m" + line + "\033[0m"
 		}
-		fmt.Fprintf(w, "\r\033[K%s", line)
+		hint := ""
+		if status.Remaining != "" {
+			hint = status.Remaining
+			if color {
+				hint = "\033[38;2;136;136;136m" + status.Remaining + "\033[0m"
+			}
+		}
+		// Two-line chrome leaves the cursor on the hint. Move up before
+		// redrawing so frames overwrite in place instead of scrolling.
+		if painted && hint != "" {
+			clearLine(w)
+			fmt.Fprint(w, "\033[1A")
+		}
+		clearLine(w)
+		if hint != "" {
+			fmt.Fprintf(w, "%s\n%s", line, hint)
+		} else {
+			fmt.Fprint(w, line)
+		}
+		painted = true
 	}
 	paint()
 	for {

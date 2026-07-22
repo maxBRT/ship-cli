@@ -1,10 +1,7 @@
 package run
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,14 +19,14 @@ func shipConfigPath(dir string) string {
 	return filepath.Join(dir, shipDir, shipConfigFile)
 }
 
-// Init creates .ship/config.yaml. On a TTY it lists Agent kinds and reads a
-// typed choice; otherwise it records agent: cursor with no prompt.
+// Init creates .ship/config.yaml. On a TTY it asks FormRunner for an Agent
+// kind; otherwise it records agent: cursor with no prompt.
 type Init struct {
-	In  io.Reader // optional; default os.Stdin
-	Out io.Writer // optional; default os.Stderr
 	// IsTerminal reports whether an interactive session is available.
 	// Optional; default requires stdin and stderr to be character devices.
 	IsTerminal func() bool
+	// Forms prompts for Agent kind on a TTY. Optional; default Forms (huh).
+	Forms FormRunner
 }
 
 // Config writes .ship/config.yaml with filled defaults and the chosen Agent kind.
@@ -43,7 +40,7 @@ func (i Init) Config(dir string) (created bool, err error) {
 	case os.IsNotExist(err):
 		cfg := defaultConfig()
 		if i.terminal() {
-			kind, err := i.promptAgentKind()
+			kind, err := i.forms().PickAgent()
 			if err != nil {
 				return false, err
 			}
@@ -67,21 +64,11 @@ timeout: %s
 	}
 }
 
-func (i Init) promptAgentKind() (string, error) {
-	out := i.out()
-	fmt.Fprintln(out, "Choose an Agent kind for this checkout:")
-	fmt.Fprintln(out, "  cursor, pi, codex, claude")
-	fmt.Fprint(out, "> ")
-
-	line, err := bufio.NewReader(i.in()).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("read agent kind: %w", err)
+func (i Init) forms() FormRunner {
+	if i.Forms != nil {
+		return i.Forms
 	}
-	kind := strings.TrimSpace(line)
-	if err := validateAgentKind(kind); err != nil {
-		return "", err
-	}
-	return kind, nil
+	return Forms{}
 }
 
 func (i Init) terminal() bool {
@@ -89,20 +76,6 @@ func (i Init) terminal() bool {
 		return i.IsTerminal()
 	}
 	return isTerminalFile(os.Stdin) && isTerminalFile(os.Stderr)
-}
-
-func (i Init) in() io.Reader {
-	if i.In != nil {
-		return i.In
-	}
-	return os.Stdin
-}
-
-func (i Init) out() io.Writer {
-	if i.Out != nil {
-		return i.Out
-	}
-	return os.Stderr
 }
 
 // InitConfig writes .ship/config.yaml with filled defaults.

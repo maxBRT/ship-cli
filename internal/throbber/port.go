@@ -11,6 +11,7 @@ type Status struct {
 	Phase     string // Implement, Review, or Final
 	Iteration int    // 1-based; 0 omits Iteration (Final)
 	Ticket    string // e.g. "#7 one"; empty omits Ticket (Final)
+	Remaining string // optional queue-remainder hint under the throbber
 }
 
 // Label is the human status text without spinner chrome, e.g.
