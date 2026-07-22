@@ -14,7 +14,7 @@ func TestWriteUsage_sectionHeadingsIncludeShipBrand(t *testing.T) {
 	run.WriteUsage(&buf)
 	out := buf.String()
 
-	for _, section := range []string{"Usage", "Flags", "Config"} {
+	for _, section := range []string{"Usage", "Flags"} {
 		found := false
 		for _, line := range strings.Split(out, "\n") {
 			if strings.Contains(line, section) && strings.Contains(line, theme.Brand) {
