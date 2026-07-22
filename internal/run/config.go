@@ -38,11 +38,7 @@ var knownAgentKinds = map[string]struct{}{
 // WriteUsage prints CLI help using Ship domain language.
 func WriteUsage(w io.Writer) {
 	heading := lipgloss.NewStyle().Foreground(theme.Amber).Bold(true)
-	fmt.Fprintf(w, `%s - run a sequential Ticket Run in the current checkout.
-
-A Run confirms a ship queue from ship-labeled Tickets via an interactive
-picker, processes each through one Iteration (Implement Phase then Review
-Phase), then a Final Phase.
+	fmt.Fprintf(w, `%s - Turn your ticktes into a PR.
 
 %s
   ship [flags]
@@ -57,11 +53,7 @@ Phase), then a Final Phase.
 Commands:
   init     create .ship/config.yaml with defaults
   update   download the latest GitHub Release and replace this binary
-
-%s
-  .ship/config.yaml at the checkout root (defaults → YAML → flags).
-  Run "ship init" to create one with filled defaults.
-`, heading.Render(theme.Brand+"  Config"))
+`)
 }
 
 func writeFlagColumns(w io.Writer) {
