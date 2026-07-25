@@ -62,15 +62,6 @@ type piUsage struct {
 	CacheWrite int64 `json:"cacheWrite"`
 }
 
-func consumePiJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	stream := newPiStream(sink)
-	for _, line := range lines {
-		stream.ProcessLine(line)
-	}
-	return stream.Finish()
-}
-
 type piStream struct {
 	sink      observe.Sink
 	sawEnd    bool

@@ -66,15 +66,6 @@ type codexUsage struct {
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
 
-func consumeCodexJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	stream := newCodexStream(sink)
-	for _, line := range lines {
-		stream.ProcessLine(line)
-	}
-	return stream.Finish()
-}
-
 type codexStream struct {
 	sink         observe.Sink
 	sawCompleted bool

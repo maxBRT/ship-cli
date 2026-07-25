@@ -71,15 +71,6 @@ type claudeUsage struct {
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
 
-func consumeClaudeStreamJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	stream := newClaudeStream(sink)
-	for _, line := range lines {
-		stream.ProcessLine(line)
-	}
-	return stream.Finish()
-}
-
 type claudeStream struct {
 	sink      observe.Sink
 	last      *claudeEvent

@@ -56,8 +56,14 @@ func runStreamedPhase(ctx context.Context, timeout time.Duration, cmd *exec.Cmd,
 		})
 	}()
 
+	readCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(readCh)
+	}()
 	waitCh := make(chan error, 1)
 	go func() {
+		<-readCh
 		waitCh <- cmd.Wait()
 	}()
 
@@ -66,11 +72,10 @@ func runStreamedPhase(ctx context.Context, timeout time.Duration, cmd *exec.Cmd,
 	case waitErr = <-waitCh:
 	case <-ctx.Done():
 		terminateProcessGroup(cmd.Process)
-		waitErr = <-waitCh
-		wg.Wait()
+		<-waitCh
 		return timeoutError(timeout, ctx.Err(), recentStderr.String())
 	}
-	wg.Wait()
+	<-readCh
 
 	if stdoutErr != nil {
 		return fmt.Errorf("phase: stdout: %w", stdoutErr)

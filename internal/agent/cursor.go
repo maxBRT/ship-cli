@@ -62,15 +62,6 @@ type streamUsage struct {
 	CacheWriteTokens int64 `json:"cacheWriteTokens"`
 }
 
-func consumeStreamJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	stream := newCursorStream(sink)
-	for _, line := range lines {
-		stream.ProcessLine(line)
-	}
-	return stream.Finish()
-}
-
 type cursorStream struct {
 	sink      observe.Sink
 	last      *streamEvent
