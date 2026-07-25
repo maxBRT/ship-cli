@@ -27,12 +27,6 @@ func (c Claude) bin() string {
 
 // RunPhase spawns a fresh Claude Code print-mode process for one Phase.
 func (c Claude) RunPhase(ctx context.Context, req PhaseRequest) error {
-	if req.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
-		defer cancel()
-	}
-
 	args := []string{
 		"-p",
 		"--dangerously-skip-permissions",
@@ -44,30 +38,10 @@ func (c Claude) RunPhase(ctx context.Context, req PhaseRequest) error {
 		args = append(args, "--model", req.Model)
 	}
 
-	cmd := exec.CommandContext(ctx, c.bin(), args...) // #nosec G204 -- Claude Code CLI; args built by Ship
+	cmd := exec.Command(c.bin(), args...) // #nosec G204 -- Claude Code CLI; args built by Ship
 	cmd.Dir = req.Workspace
 	cmd.Stdin = strings.NewReader(req.Prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("phase: %w", ctx.Err())
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("phase: %s", msg)
-	}
-
-	if err := consumeClaudeStreamJSON(stdout.Bytes(), req.Events); err != nil {
-		return err
-	}
-	return nil
+	return runStreamedPhase(ctx, req.Timeout, cmd, newClaudeStream(req.Events))
 }
 
 type claudeEvent struct {
@@ -99,87 +73,100 @@ type claudeUsage struct {
 
 func consumeClaudeStreamJSON(stdout []byte, sink observe.Sink) error {
 	lines := bytes.Split(stdout, []byte("\n"))
-	var last *claudeEvent
-	toolCount := 0
-	pending := map[string]string{} // tool_use id -> name
+	stream := newClaudeStream(sink)
 	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var ev claudeEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "assistant":
-			if ev.Message == nil {
-				continue
-			}
-			for _, block := range ev.Message.Content {
-				if block.Type != "tool_use" {
-					continue
-				}
-				name := block.Name
-				if name == "" {
-					name = "unknown"
-				}
-				if block.ID != "" {
-					pending[block.ID] = name
-				}
-			}
-		case "user":
-			if ev.Message == nil {
-				continue
-			}
-			for _, block := range ev.Message.Content {
-				if block.Type != "tool_result" {
-					continue
-				}
-				toolCount++
-				if sink == nil {
-					continue
-				}
-				name := pending[block.ToolUseID]
-				if name == "" {
-					name = "unknown"
-				}
-				status := observe.ToolOK
-				if block.IsError {
-					status = observe.ToolError
-				}
-				sink.Emit(observe.Event{
-					Kind:   observe.KindTool,
-					Name:   name,
-					Status: status,
-				})
-			}
-		case "result":
-			last = &ev
-		}
+		stream.ProcessLine(line)
 	}
-	if last == nil {
+	return stream.Finish()
+}
+
+type claudeStream struct {
+	sink      observe.Sink
+	last      *claudeEvent
+	toolCount int
+	pending   map[string]string
+}
+
+func newClaudeStream(sink observe.Sink) *claudeStream {
+	return &claudeStream{sink: sink, pending: map[string]string{}}
+}
+
+func (s *claudeStream) ProcessLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return
+	}
+	var ev claudeEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return
+	}
+	switch ev.Type {
+	case "assistant":
+		if ev.Message == nil {
+			return
+		}
+		for _, block := range ev.Message.Content {
+			if block.Type != "tool_use" {
+				continue
+			}
+			name := block.Name
+			if name == "" {
+				name = "unknown"
+			}
+			if block.ID != "" {
+				s.pending[block.ID] = name
+			}
+		}
+	case "user":
+		if ev.Message == nil {
+			return
+		}
+		for _, block := range ev.Message.Content {
+			if block.Type != "tool_result" {
+				continue
+			}
+			s.toolCount++
+			if s.sink == nil {
+				continue
+			}
+			name := s.pending[block.ToolUseID]
+			if name == "" {
+				name = "unknown"
+			}
+			status := observe.ToolOK
+			if block.IsError {
+				status = observe.ToolError
+			}
+			s.sink.Emit(observe.Event{Kind: observe.KindTool, Name: name, Status: status})
+		}
+	case "result":
+		s.last = &ev
+	}
+}
+
+func (s *claudeStream) Finish() error {
+	if s.last == nil {
 		return fmt.Errorf("phase: missing terminal result event in stream-json output")
 	}
-	if last.Subtype != "success" {
-		return fmt.Errorf("phase: result subtype %q, want success", last.Subtype)
+	if s.last.Subtype != "success" {
+		return fmt.Errorf("phase: result subtype %q, want success", s.last.Subtype)
 	}
-	if sink != nil {
+	if s.sink != nil {
 		end := observe.Event{
 			Kind:       observe.KindPhaseEnd,
 			Outcome:    observe.OutcomeSuccess,
-			DurationMS: last.DurationMS,
-			ToolCount:  toolCount,
+			DurationMS: s.last.DurationMS,
+			ToolCount:  s.toolCount,
 		}
-		if last.Usage != nil {
+		if s.last.Usage != nil {
 			end.Tokens = &observe.TokenCounts{
-				Input:      last.Usage.InputTokens,
-				Output:     last.Usage.OutputTokens,
-				CacheRead:  last.Usage.CacheReadInputTokens,
-				CacheWrite: last.Usage.CacheCreationInputTokens,
+				Input:      s.last.Usage.InputTokens,
+				Output:     s.last.Usage.OutputTokens,
+				CacheRead:  s.last.Usage.CacheReadInputTokens,
+				CacheWrite: s.last.Usage.CacheCreationInputTokens,
 			}
 		}
-		sink.Emit(end)
+		s.sink.Emit(end)
 	}
 	return nil
 }

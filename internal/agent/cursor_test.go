@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,12 +84,51 @@ func TestCursor_RunPhase_surfacesStderrOnNonZeroExit(t *testing.T) {
 	}
 }
 
-func TestCursor_RunPhase_timeoutKillsHungAgent(t *testing.T) {
+func TestCursor_RunPhase_streamsToolEventsBeforeProcessExit(t *testing.T) {
 	bin, _ := writeFakeAgent(t, fakeAgentConfig{
-		exitCode: 0,
-		stdout:   `{"type":"result","subtype":"success"}` + "\n",
-		sleep:    2 * time.Second,
+		exitCode:          0,
+		stdoutBeforeSleep: `{"type":"tool_call","subtype":"completed","call_id":"c1","duration_ms":42,"tool_call":{"readToolCall":{"result":{"success":{}}}}}` + "\n",
+		stdout:            `{"type":"result","subtype":"success"}` + "\n",
+		sleep:             350 * time.Millisecond,
 	})
+	sink := &recordingSink{}
+	c := agent.Cursor{Bin: bin}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- c.RunPhase(context.Background(), agent.PhaseRequest{
+			Prompt:    "work slowly",
+			Workspace: t.TempDir(),
+			Timeout:   2 * time.Second,
+			Events:    sink,
+		})
+	}()
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		if len(sink.tools()) == 1 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("RunPhase returned before live event assertion: %v", err)
+		case <-deadline:
+			t.Fatalf("tool events = %d, want live event before process exit", len(sink.tools()))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+}
+
+func TestCursor_RunPhase_timeoutPreservesLiveEventsAndNamesDeadline(t *testing.T) {
+	bin, _ := writeFakeAgent(t, fakeAgentConfig{
+		exitCode:          0,
+		stdoutBeforeSleep: `{"type":"tool_call","subtype":"completed","call_id":"c1","duration_ms":9,"tool_call":{"shellToolCall":{"result":{"success":{}}}}}` + "\n",
+		sleep:             5 * time.Second,
+	})
+	sink := &recordingSink{}
 	c := agent.Cursor{Bin: bin}
 
 	start := time.Now()
@@ -96,16 +136,47 @@ func TestCursor_RunPhase_timeoutKillsHungAgent(t *testing.T) {
 		Prompt:    "hang",
 		Workspace: t.TempDir(),
 		Timeout:   200 * time.Millisecond,
+		Events:    sink,
 	})
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("RunPhase: want timeout error")
 	}
-	if !strings.Contains(err.Error(), "deadline exceeded") && !strings.Contains(err.Error(), "canceled") {
-		t.Fatalf("RunPhase error = %q, want context timeout", err)
+	for _, want := range []string{"timeout", "200ms"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RunPhase error = %q, want %q", err, want)
+		}
 	}
 	if elapsed > time.Second {
-		t.Fatalf("RunPhase took %v, want kill near timeout", elapsed)
+		t.Fatalf("RunPhase took %v, want return near timeout", elapsed)
+	}
+	tools := sink.tools()
+	if len(tools) != 1 || tools[0].Name != "Shell" || tools[0].DurationMS != 9 {
+		t.Fatalf("live tool events = %+v, want Shell event preserved after timeout", tools)
+	}
+}
+
+func TestCursor_RunPhase_timeoutKillsHungAgentProcessGroup(t *testing.T) {
+	bin, _ := writeFakeAgent(t, fakeAgentConfig{
+		exitCode:              0,
+		stdoutBeforeSleep:     `{"type":"tool_call","subtype":"completed","call_id":"c1","duration_ms":1,"tool_call":{"shellToolCall":{"result":{"success":{}}}}}` + "\n",
+		spawnChildKeepsStdout: true,
+		sleep:                 5 * time.Second,
+	})
+	c := agent.Cursor{Bin: bin}
+
+	start := time.Now()
+	err := c.RunPhase(context.Background(), agent.PhaseRequest{
+		Prompt:    "child hangs",
+		Workspace: t.TempDir(),
+		Timeout:   200 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("RunPhase: want timeout error")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("RunPhase took %v, want process group cleanup near timeout", elapsed)
 	}
 }
 
@@ -292,10 +363,12 @@ func TestCursor_RunPhase_emitsToolErrorStatusFromFailedToolResult(t *testing.T) 
 }
 
 type fakeAgentConfig struct {
-	exitCode int
-	stdout   string
-	stderr   string
-	sleep    time.Duration
+	exitCode              int
+	stdout                string
+	stdoutBeforeSleep     string
+	stderr                string
+	sleep                 time.Duration
+	spawnChildKeepsStdout bool
 }
 
 type fakeCapture struct {
@@ -341,6 +414,9 @@ func writeFakeAgent(t *testing.T, cfg fakeAgentConfig) (string, fakeCapture) {
 	if err := os.WriteFile(filepath.Join(dir, "stdout"), []byte(cfg.stdout), 0o644); err != nil {
 		t.Fatalf("write stdout fixture: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "stdout_before_sleep"), []byte(cfg.stdoutBeforeSleep), 0o644); err != nil {
+		t.Fatalf("write pre-sleep stdout fixture: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "stderr"), []byte(cfg.stderr), 0o644); err != nil {
 		t.Fatalf("write stderr fixture: %v", err)
 	}
@@ -351,9 +427,20 @@ func writeFakeAgent(t *testing.T, cfg fakeAgentConfig) (string, fakeCapture) {
 	b.WriteString("printf '%s\\n' \"$@\" > \"$dir/args\"\n")
 	b.WriteString("pwd > \"$dir/cwd\"\n")
 	b.WriteString("cat > \"$dir/stdin\"\n")
+	if cfg.stdoutBeforeSleep != "" {
+		b.WriteString("cat \"$dir/stdout_before_sleep\"\n")
+	}
+	if cfg.spawnChildKeepsStdout {
+		fmt.Fprintf(&b, "sleep %g &\n", cfg.sleep.Seconds())
+		b.WriteString("wait\n")
+	}
 	if cfg.sleep > 0 {
-		// exec so CommandContext kill targets the sleeper, not a parent shell
-		fmt.Fprintf(&b, "exec sleep %g\n", cfg.sleep.Seconds())
+		if cfg.stdoutBeforeSleep != "" || cfg.spawnChildKeepsStdout {
+			fmt.Fprintf(&b, "sleep %g\n", cfg.sleep.Seconds())
+		} else {
+			// exec so CommandContext kill targets the sleeper, not a parent shell
+			fmt.Fprintf(&b, "exec sleep %g\n", cfg.sleep.Seconds())
+		}
 	}
 	b.WriteString("cat \"$dir/stderr\" >&2\n")
 	b.WriteString("cat \"$dir/stdout\"\n")
@@ -401,14 +488,19 @@ func assertNoFlag(t *testing.T, args []string, flag string) {
 }
 
 type recordingSink struct {
+	mu     sync.Mutex
 	events []observe.Event
 }
 
 func (s *recordingSink) Emit(e observe.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.events = append(s.events, e)
 }
 
 func (s *recordingSink) tools() []observe.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var out []observe.Event
 	for _, e := range s.events {
 		if e.Kind == observe.KindTool {
@@ -419,6 +511,8 @@ func (s *recordingSink) tools() []observe.Event {
 }
 
 func (s *recordingSink) phaseEnd() *observe.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := len(s.events) - 1; i >= 0; i-- {
 		if s.events[i].Kind == observe.KindPhaseEnd {
 			e := s.events[i]

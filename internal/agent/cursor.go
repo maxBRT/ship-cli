@@ -28,12 +28,6 @@ func (c Cursor) bin() string {
 
 // RunPhase spawns a fresh headless agent process for one Phase.
 func (c Cursor) RunPhase(ctx context.Context, req PhaseRequest) error {
-	if req.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
-		defer cancel()
-	}
-
 	args := []string{
 		"-p",
 		"--trust",
@@ -46,30 +40,10 @@ func (c Cursor) RunPhase(ctx context.Context, req PhaseRequest) error {
 		args = append(args, "--model", req.Model)
 	}
 
-	cmd := exec.CommandContext(ctx, c.bin(), args...) // #nosec G204 -- Cursor agent CLI; args built by Ship
+	cmd := exec.Command(c.bin(), args...) // #nosec G204 -- Cursor agent CLI; args built by Ship
 	cmd.Dir = req.Workspace
 	cmd.Stdin = strings.NewReader(req.Prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("phase: %w", ctx.Err())
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("phase: %s", msg)
-	}
-
-	if err := consumeStreamJSON(stdout.Bytes(), req.Events); err != nil {
-		return err
-	}
-	return nil
+	return runStreamedPhase(ctx, req.Timeout, cmd, newCursorStream(req.Events))
 }
 
 type streamEvent struct {
@@ -90,57 +64,74 @@ type streamUsage struct {
 
 func consumeStreamJSON(stdout []byte, sink observe.Sink) error {
 	lines := bytes.Split(stdout, []byte("\n"))
-	var last *streamEvent
-	toolCount := 0
+	stream := newCursorStream(sink)
 	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var ev streamEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "tool_call":
-			if ev.Subtype == "completed" {
-				toolCount++
-				if sink != nil {
-					name, status := parseToolCall(ev.ToolCall)
-					sink.Emit(observe.Event{
-						Kind:       observe.KindTool,
-						Name:       name,
-						DurationMS: ev.DurationMS,
-						Status:     status,
-					})
-				}
-			}
-		case "result":
-			last = &ev
-		}
+		stream.ProcessLine(line)
 	}
-	if last == nil {
+	return stream.Finish()
+}
+
+type cursorStream struct {
+	sink      observe.Sink
+	last      *streamEvent
+	toolCount int
+}
+
+func newCursorStream(sink observe.Sink) *cursorStream {
+	return &cursorStream{sink: sink}
+}
+
+func (s *cursorStream) ProcessLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return
+	}
+	var ev streamEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return
+	}
+	switch ev.Type {
+	case "tool_call":
+		if ev.Subtype == "completed" {
+			s.toolCount++
+			if s.sink != nil {
+				name, status := parseToolCall(ev.ToolCall)
+				s.sink.Emit(observe.Event{
+					Kind:       observe.KindTool,
+					Name:       name,
+					DurationMS: ev.DurationMS,
+					Status:     status,
+				})
+			}
+		}
+	case "result":
+		s.last = &ev
+	}
+}
+
+func (s *cursorStream) Finish() error {
+	if s.last == nil {
 		return fmt.Errorf("phase: missing terminal result event in stream-json output")
 	}
-	if last.Subtype != "success" {
-		return fmt.Errorf("phase: result subtype %q, want success", last.Subtype)
+	if s.last.Subtype != "success" {
+		return fmt.Errorf("phase: result subtype %q, want success", s.last.Subtype)
 	}
-	if sink != nil {
+	if s.sink != nil {
 		end := observe.Event{
 			Kind:       observe.KindPhaseEnd,
 			Outcome:    observe.OutcomeSuccess,
-			DurationMS: last.DurationMS,
-			ToolCount:  toolCount,
+			DurationMS: s.last.DurationMS,
+			ToolCount:  s.toolCount,
 		}
-		if last.Usage != nil {
+		if s.last.Usage != nil {
 			end.Tokens = &observe.TokenCounts{
-				Input:      last.Usage.InputTokens,
-				Output:     last.Usage.OutputTokens,
-				CacheRead:  last.Usage.CacheReadTokens,
-				CacheWrite: last.Usage.CacheWriteTokens,
+				Input:      s.last.Usage.InputTokens,
+				Output:     s.last.Usage.OutputTokens,
+				CacheRead:  s.last.Usage.CacheReadTokens,
+				CacheWrite: s.last.Usage.CacheWriteTokens,
 			}
 		}
-		sink.Emit(end)
+		s.sink.Emit(end)
 	}
 	return nil
 }
