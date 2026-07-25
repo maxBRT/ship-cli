@@ -108,6 +108,9 @@ func LoadConfig(dir string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("%s: timeout: invalid duration %q", rel, *raw.Timeout)
 	}
+	if timeout <= 0 {
+		return Config{}, fmt.Errorf("%s: timeout must be positive", rel)
+	}
 
 	return Config{
 		Branch:        *raw.Branch,

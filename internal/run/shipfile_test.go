@@ -156,6 +156,29 @@ timeout: 10m
 	}
 }
 
+func TestLoadConfig_rejectsNonPositiveTimeout(t *testing.T) {
+	for _, timeout := range []string{"0s", "-1s"} {
+		t.Run(timeout, func(t *testing.T) {
+			dir := t.TempDir()
+			content := `branch: ""
+agent: cursor
+model: ""
+max_iterations: 10
+timeout: ` + timeout + `
+`
+			writeShipConfig(t, dir, content)
+
+			_, err := run.LoadConfig(dir)
+			if err == nil {
+				t.Fatal("LoadConfig: want error for non-positive timeout")
+			}
+			if !strings.Contains(err.Error(), "timeout must be positive") {
+				t.Fatalf("LoadConfig error = %q, want positive timeout message", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_ignoresUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	content := `branch: ""

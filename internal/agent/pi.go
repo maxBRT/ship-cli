@@ -27,12 +27,6 @@ func (p Pi) bin() string {
 
 // RunPhase spawns a fresh headless Pi process for one Phase.
 func (p Pi) RunPhase(ctx context.Context, req PhaseRequest) error {
-	if req.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
-		defer cancel()
-	}
-
 	args := []string{
 		"-p",
 		"--mode", "json",
@@ -43,30 +37,10 @@ func (p Pi) RunPhase(ctx context.Context, req PhaseRequest) error {
 		args = append(args, "--model", req.Model)
 	}
 
-	cmd := exec.CommandContext(ctx, p.bin(), args...) // #nosec G204 -- Pi agent CLI; args built by Ship
+	cmd := exec.Command(p.bin(), args...) // #nosec G204 -- Pi agent CLI; args built by Ship
 	cmd.Dir = req.Workspace
 	cmd.Stdin = strings.NewReader(req.Prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("phase: %w", ctx.Err())
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("phase: %s", msg)
-	}
-
-	if err := consumePiJSON(stdout.Bytes(), req.Events); err != nil {
-		return err
-	}
-	return nil
+	return runStreamedPhase(ctx, req.Timeout, cmd, newPiStream(req.Events))
 }
 
 type piEvent struct {
@@ -88,54 +62,57 @@ type piUsage struct {
 	CacheWrite int64 `json:"cacheWrite"`
 }
 
-func consumePiJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	sawEnd := false
-	toolCount := 0
-	var tokens *observe.TokenCounts
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var ev piEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "tool_execution_end":
-			toolCount++
-			if sink != nil {
-				status := observe.ToolOK
-				if ev.IsError {
-					status = observe.ToolError
-				}
-				name := ev.ToolName
-				if name == "" {
-					name = "unknown"
-				}
-				sink.Emit(observe.Event{
-					Kind:   observe.KindTool,
-					Name:   name,
-					Status: status,
-				})
-			}
-		case "agent_end":
-			sawEnd = true
-			tokens = sumPiUsage(ev.Messages)
-		}
+type piStream struct {
+	sink      observe.Sink
+	sawEnd    bool
+	toolCount int
+	tokens    *observe.TokenCounts
+}
+
+func newPiStream(sink observe.Sink) *piStream {
+	return &piStream{sink: sink}
+}
+
+func (s *piStream) ProcessLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return
 	}
-	if !sawEnd {
+	var ev piEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return
+	}
+	switch ev.Type {
+	case "tool_execution_end":
+		s.toolCount++
+		if s.sink != nil {
+			status := observe.ToolOK
+			if ev.IsError {
+				status = observe.ToolError
+			}
+			name := ev.ToolName
+			if name == "" {
+				name = "unknown"
+			}
+			s.sink.Emit(observe.Event{Kind: observe.KindTool, Name: name, Status: status})
+		}
+	case "agent_end":
+		s.sawEnd = true
+		s.tokens = sumPiUsage(ev.Messages)
+	}
+}
+
+func (s *piStream) Finish() error {
+	if !s.sawEnd {
 		return fmt.Errorf("phase: missing terminal agent_end event in json output")
 	}
-	if sink != nil {
-		end := observe.Event{
+	if s.sink != nil {
+		s.sink.Emit(observe.Event{
 			Kind:      observe.KindPhaseEnd,
 			Outcome:   observe.OutcomeSuccess,
-			ToolCount: toolCount,
-			Tokens:    tokens,
-		}
-		sink.Emit(end)
+			ToolCount: s.toolCount,
+			Tokens:    s.tokens,
+		})
 	}
 	return nil
 }

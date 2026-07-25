@@ -27,12 +27,6 @@ func (c Codex) bin() string {
 
 // RunPhase spawns a fresh ephemeral Codex exec process for one Phase.
 func (c Codex) RunPhase(ctx context.Context, req PhaseRequest) error {
-	if req.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
-		defer cancel()
-	}
-
 	args := []string{
 		"exec",
 		"--ephemeral",
@@ -46,36 +40,16 @@ func (c Codex) RunPhase(ctx context.Context, req PhaseRequest) error {
 	// "-" forces the full Phase prompt from stdin (not prompt+context mode).
 	args = append(args, "-")
 
-	cmd := exec.CommandContext(ctx, c.bin(), args...) // #nosec G204 -- Codex agent CLI; args built by Ship
+	cmd := exec.Command(c.bin(), args...) // #nosec G204 -- Codex agent CLI; args built by Ship
 	cmd.Dir = req.Workspace
 	cmd.Stdin = strings.NewReader(req.Prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("phase: %w", ctx.Err())
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("phase: %s", msg)
-	}
-
-	if err := consumeCodexJSON(stdout.Bytes(), req.Events); err != nil {
-		return err
-	}
-	return nil
+	return runStreamedPhase(ctx, req.Timeout, cmd, newCodexStream(req.Events))
 }
 
 type codexEvent struct {
-	Type  string          `json:"type"`
-	Item  *codexItem      `json:"item"`
-	Usage *codexUsage     `json:"usage"`
+	Type  string      `json:"type"`
+	Item  *codexItem  `json:"item"`
+	Usage *codexUsage `json:"usage"`
 }
 
 type codexItem struct {
@@ -92,64 +66,64 @@ type codexUsage struct {
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
 }
 
-func consumeCodexJSON(stdout []byte, sink observe.Sink) error {
-	lines := bytes.Split(stdout, []byte("\n"))
-	sawCompleted := false
-	sawFailed := false
-	toolCount := 0
-	var tokens *observe.TokenCounts
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var ev codexEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "item.completed":
-			if ev.Item == nil || !codexItemIsTool(ev.Item.Type) {
-				continue
-			}
-			toolCount++
-			if sink != nil {
-				name := codexToolName(ev.Item)
-				status := observe.ToolOK
-				if ev.Item.Status == "failed" || ev.Item.Status == "error" {
-					status = observe.ToolError
-				}
-				sink.Emit(observe.Event{
-					Kind:   observe.KindTool,
-					Name:   name,
-					Status: status,
-				})
-			}
-		case "turn.completed":
-			sawCompleted = true
-			if ev.Usage != nil {
-				tokens = &observe.TokenCounts{
-					Input:     ev.Usage.InputTokens,
-					Output:    ev.Usage.OutputTokens + ev.Usage.ReasoningOutputTokens,
-					CacheRead: ev.Usage.CachedInputTokens,
-				}
-			}
-		case "turn.failed":
-			sawFailed = true
-		}
+type codexStream struct {
+	sink         observe.Sink
+	sawCompleted bool
+	sawFailed    bool
+	toolCount    int
+	tokens       *observe.TokenCounts
+}
+
+func newCodexStream(sink observe.Sink) *codexStream {
+	return &codexStream{sink: sink}
+}
+
+func (s *codexStream) ProcessLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return
 	}
-	if sawFailed {
+	var ev codexEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return
+	}
+	switch ev.Type {
+	case "item.completed":
+		if ev.Item == nil || !codexItemIsTool(ev.Item.Type) {
+			return
+		}
+		s.toolCount++
+		if s.sink != nil {
+			name := codexToolName(ev.Item)
+			status := observe.ToolOK
+			if ev.Item.Status == "failed" || ev.Item.Status == "error" {
+				status = observe.ToolError
+			}
+			s.sink.Emit(observe.Event{Kind: observe.KindTool, Name: name, Status: status})
+		}
+	case "turn.completed":
+		s.sawCompleted = true
+		if ev.Usage != nil {
+			s.tokens = &observe.TokenCounts{Input: ev.Usage.InputTokens, Output: ev.Usage.OutputTokens + ev.Usage.ReasoningOutputTokens, CacheRead: ev.Usage.CachedInputTokens}
+		}
+	case "turn.failed":
+		s.sawFailed = true
+	}
+}
+
+func (s *codexStream) Finish() error {
+	if s.sawFailed {
 		return fmt.Errorf("phase: turn.failed")
 	}
-	if !sawCompleted {
+	if !s.sawCompleted {
 		return fmt.Errorf("phase: missing terminal turn.completed event in json output")
 	}
-	if sink != nil {
-		sink.Emit(observe.Event{
+	if s.sink != nil {
+		s.sink.Emit(observe.Event{
 			Kind:      observe.KindPhaseEnd,
 			Outcome:   observe.OutcomeSuccess,
-			ToolCount: toolCount,
-			Tokens:    tokens,
+			ToolCount: s.toolCount,
+			Tokens:    s.tokens,
 		})
 	}
 	return nil
